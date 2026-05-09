@@ -1,16 +1,19 @@
 import * as vscode from "vscode";
 import { CustomAIProvider } from "./provider.js";
+import { initLogger, log } from "./logger.js";
 
 let provider: CustomAIProvider | undefined;
 let configPanel: vscode.WebviewPanel | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
-  console.log("[CustomAI] Extension activating...");
-  
-  const models = getModels();
-  console.log(`[CustomAI] Found ${models.length} models in config`);
-  
+  initLogger();
+  log("Extension activating...");
+
   provider = new CustomAIProvider(context);
+  log("CustomAIProvider created");
+
+  const models = getModels();
+  log(`Found ${models.length} models in config`);
 
   // Register chat participant for setup
   const setupParticipant = vscode.chat.createChatParticipant(
@@ -80,11 +83,15 @@ You can also open the config panel with:
     })
   );
 
+  log("Registering language model chat provider...");
   context.subscriptions.push(
-    vscode.lm.registerLanguageModelChatProvider("customai", provider)
+    vscode.lm.registerLanguageModelChatProvider("customai", provider!)
   );
+  log("Provider registered successfully");
 
-  provider.refreshModelPicker();
+  log("Calling refreshModelPicker...");
+  provider!.refreshModelPicker();
+  log("Activation complete");
 }
 
 async function quickAddModel(): Promise<void> {

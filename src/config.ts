@@ -10,9 +10,45 @@ export interface AIModel {
   enabled: boolean;
 }
 
+const DEFAULT_MODELS: AIModel[] = [
+  {
+    id: "default-openai",
+    name: "OpenAI (请配置)",
+    provider: "openai",
+    baseUrl: "https://api.openai.com/v1",
+    apiKey: "",
+    modelName: "gpt-4-turbo-preview",
+    enabled: true,
+  },
+  {
+    id: "default-anthropic",
+    name: "Claude (请配置)",
+    provider: "anthropic",
+    baseUrl: "https://api.anthropic.com/v1",
+    apiKey: "",
+    modelName: "claude-3-sonnet-20240229",
+    enabled: true,
+  },
+  {
+    id: "default-ollama",
+    name: "Ollama (请配置)",
+    provider: "ollama",
+    baseUrl: "http://localhost:11434/v1",
+    apiKey: "",
+    modelName: "llama2",
+    enabled: true,
+  },
+];
+
 export function getModels(): AIModel[] {
   const config = vscode.workspace.getConfiguration("customai");
-  return config.get<AIModel[]>("models", []) || [];
+  const storedModels = config.get<AIModel[]>("models", []) || [];
+
+  if (storedModels.length === 0) {
+    return DEFAULT_MODELS;
+  }
+
+  return storedModels;
 }
 
 export async function saveModels(models: AIModel[]): Promise<void> {
