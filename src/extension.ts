@@ -477,8 +477,8 @@ function getConfigHtml(): string {
           </div>
           <div class="model-info">URL: \${m.baseUrl}</div>
           <div class="model-actions">
-            <button class="btn btn-primary btn-sm" onclick="editModel('\${m.id}')">编辑</button>
-            <button class="btn btn-danger btn-sm" onclick="deleteModel('\${m.id}')">删除</button>
+            <button class="btn btn-primary btn-sm" onclick="editModel('\${btoa(m.id)}')">编辑</button>
+            <button class="btn btn-danger btn-sm" onclick="deleteModel('\${btoa(m.id)}')">删除</button>
           </div>
         </div>
       \`).join('');
@@ -497,9 +497,10 @@ function getConfigHtml(): string {
     }
 
     function editModel(id) {
-      const model = models.find(m => m.id === id);
+      const decodedId = atob(id);
+      const model = models.find(m => m.id === decodedId);
       if (!model) return;
-      editingId = id;
+      editingId = decodedId;
       document.getElementById('modalTitle').textContent = '编辑模型';
       document.getElementById('saveBtn').textContent = '保存';
       document.getElementById('modelName').value = model.name;
@@ -558,7 +559,7 @@ function getConfigHtml(): string {
 
     function deleteModel(id) {
       if (confirm('确定要删除这个模型吗？')) {
-        vscode.postMessage({ type: 'deleteModel', id });
+        vscode.postMessage({ type: 'deleteModel', id: atob(id) });
       }
     }
 
