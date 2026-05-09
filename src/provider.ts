@@ -64,7 +64,7 @@ export class CustomAIProvider {
       maxOutputTokens: 8192,
       isUserSelectable: true,
       capabilities: {
-        imageInput: true,
+        imageInput: false,
         toolCalling: true,
       },
       detail: hasApiKey
