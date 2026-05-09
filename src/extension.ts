@@ -96,9 +96,15 @@ You can also open the config panel with:
 
 async function quickAddModel(): Promise<void> {
   const items: vscode.QuickPickItem[] = [
-    { label: "$(gear) OpenAI", description: "GPT-4, GPT-3.5 Turbo", alwaysShow: true },
-    { label: "$(gear) Anthropic (Claude)", description: "Claude 3 Sonnet, Opus, Haiku", alwaysShow: true },
-    { label: "$(gear) Ollama", description: "本地模型 (Llama2, Mistral等)", alwaysShow: true },
+    { label: "$(star-full) 阶跃星辰 (Step)", description: "Step-1.5V, Step-2 等", alwaysShow: true },
+    { label: "$(star-full) 智谱 AI (GLM)", description: "GLM-4, CogVideo 等", alwaysShow: true },
+    { label: "$(star-full) 月之暗面 (Moonshot)", description: "moonshot-v1-8k/32k/128k", alwaysShow: true },
+    { label: "$(star-full) DeepSeek", description: "DeepSeek-V3, DeepSeek-R1", alwaysShow: true },
+    { label: "$(star-full) 百川 (Baichuan)", description: "Baichuan4", alwaysShow: true },
+    { label: "$(star-full) 零一万物 (Yi)", description: "yi-large, yi-medium", alwaysShow: true },
+    { label: "$(gear) OpenAI", description: "GPT-4o, GPT-4, GPT-3.5", alwaysShow: true },
+    { label: "$(gear) Anthropic (Claude)", description: "Claude 3.5 Sonnet, Opus", alwaysShow: true },
+    { label: "$(gear) Ollama", description: "本地模型 (Llama, Mistral等)", alwaysShow: true },
     { label: "$(gear) LM Studio", description: "本地模型 via LM Studio", alwaysShow: true },
     { label: "$(gear) 自定义 API", description: "任何 OpenAI 兼容 API", alwaysShow: true },
   ];
@@ -111,34 +117,23 @@ async function quickAddModel(): Promise<void> {
 
   if (!selected) return;
 
-  const providerMap: Record<string, string> = {
-    "openai": "openai",
-    "anthropic": "anthropic",
-    "ollama": "ollama",
-    "lm studio": "lmstudio",
-    "自定义 api": "custom",
+  const providerKey = selected.label.replace(/^\$\(star-full\)\s*/, "").replace(/^\$\(gear\)\s*/, "").toLowerCase();
+
+  const defaults: Record<string, { baseUrl: string; apiKeyPlaceholder: string }> = {
+    "阶跃星辰 (step)": { baseUrl: "https://api.stepfun.com/v1", apiKeyPlaceholder: "Step API Key" },
+    "智谱 ai (glm)": { baseUrl: "https://open.bigmodel.cn/api/paas/v4", apiKeyPlaceholder: "智谱 API Key" },
+    "月之暗面 (moonshot)": { baseUrl: "https://api.moonshot.cn/v1", apiKeyPlaceholder: "Moonshot API Key" },
+    "deepseek": { baseUrl: "https://api.deepseek.com/v1", apiKeyPlaceholder: "DeepSeek API Key" },
+    "百川 (baichuan)": { baseUrl: "https://api.baichuan-ai.com/v1", apiKeyPlaceholder: "百川 API Key" },
+    "零一万物 (yi)": { baseUrl: "https://api.lingyiwanwu.com/v1", apiKeyPlaceholder: "零一万物 API Key" },
+    "openai": { baseUrl: "https://api.openai.com/v1", apiKeyPlaceholder: "sk-..." },
+    "anthropic (claude)": { baseUrl: "https://api.anthropic.com/v1", apiKeyPlaceholder: "sk-ant-..." },
+    "ollama": { baseUrl: "http://localhost:11434/v1", apiKeyPlaceholder: "" },
+    "lm studio": { baseUrl: "http://localhost:1234/v1", apiKeyPlaceholder: "" },
+    "自定义 api": { baseUrl: "", apiKeyPlaceholder: "API Key" },
   };
 
-  const selectedProvider = providerMap[selected.label.toLowerCase().replace(/^\$\(gear\)\s*/, "")] || "custom";
-
-  const defaults: Record<string, { baseUrl: string; modelName: string }> = {
-    openai: { baseUrl: "https://api.openai.com/v1", modelName: "gpt-4-turbo-preview" },
-    anthropic: { baseUrl: "https://api.anthropic.com/v1", modelName: "claude-3-sonnet-20240229" },
-    ollama: { baseUrl: "http://localhost:11434/v1", modelName: "llama2" },
-    lmstudio: { baseUrl: "http://localhost:1234/v1", modelName: "local-model" },
-    custom: { baseUrl: "", modelName: "" },
-  };
-
-  const d = defaults[selectedProvider] || defaults.custom;
-  const displayName = selected.label.replace(/^\$\(gear\)\s*/, "");
-
-  const name = await vscode.window.showInputBox({
-    prompt: "输入模型显示名称",
-    value: displayName,
-    validateInput: (value) => (value.trim() ? null : "名称不能为空"),
-  });
-
-  if (!name) return;
+  const d = defaults[providerKey] || defaults["自定义 api"];
 
   const baseUrl = await vscode.window.showInputBox({
     prompt: "输入 Base URL",
@@ -148,41 +143,90 @@ async function quickAddModel(): Promise<void> {
 
   if (!baseUrl) return;
 
-  const modelName = await vscode.window.showInputBox({
-    prompt: "输入模型名称",
-    value: d.modelName,
-    validateInput: (value) => (value.trim() ? null : "模型名称不能为空"),
-  });
-
-  if (!modelName) return;
-
   const apiKey = await vscode.window.showInputBox({
-    prompt: "输入 API Key（可选）",
+    prompt: "输入 API Key",
     password: true,
+    placeHolder: d.apiKeyPlaceholder,
   });
 
-  const model = {
-    id: Date.now().toString(),
-    name: name.trim(),
-    provider: selectedProvider,
-    baseUrl: baseUrl.trim(),
-    apiKey: apiKey?.trim() || "",
-    modelName: modelName.trim(),
-    enabled: true,
-  };
+  if (apiKey === undefined) return;
+
+  let selectedModels: string[] = [];
+  try {
+    const models = await fetchAvailableModels(baseUrl.trim(), apiKey?.trim() || "");
+    if (models.length > 0) {
+      const picks = await vscode.window.showQuickPick(
+        models.map((m) => ({ label: m, picked: true, alwaysShow: true })),
+        {
+          placeHolder: "勾选要启用的模型（取消勾选则不添加）",
+          title: "可用模型列表",
+          canPickMany: true,
+        }
+      );
+      if (!picks || picks.length === 0) return;
+      selectedModels = picks.map((p) => p.label);
+    } else {
+      const manualModel = await vscode.window.showInputBox({
+        prompt: "未获取到模型列表，请手动输入模型名称",
+        placeHolder: "gpt-4-turbo-preview",
+      });
+      if (!manualModel) return;
+      selectedModels = [manualModel.trim()];
+    }
+  } catch (err) {
+    log(`fetchModels error: ${err}`);
+    const manualModel = await vscode.window.showInputBox({
+      prompt: `获取模型失败: ${err}，请手动输入模型名称`,
+      placeHolder: "gpt-4-turbo-preview",
+    });
+    if (!manualModel) return;
+    selectedModels = [manualModel.trim()];
+  }
 
   const config = vscode.workspace.getConfiguration("customai");
-  const models = config.get<any[]>("models", []) || [];
-  models.push(model);
-  
-  const target = vscode.workspace.workspaceFolders 
-    ? vscode.ConfigurationTarget.Workspace 
+  const existingModels: any[] = config.get<any[]>("models", []) || [];
+
+  for (const modelName of selectedModels) {
+    const displayName = `${selected.label.replace(/^\$\(star-full\)\s*/, "").replace(/^\$\(gear\)\s*/, "")} - ${modelName}`;
+    existingModels.push({
+      id: Date.now().toString() + Math.random().toString(36).slice(2, 6),
+      name: displayName,
+      provider: providerKey,
+      baseUrl: baseUrl.trim(),
+      apiKey: apiKey?.trim() || "",
+      modelName: modelName,
+      enabled: true,
+    });
+  }
+
+  const target = vscode.workspace.workspaceFolders
+    ? vscode.ConfigurationTarget.Workspace
     : vscode.ConfigurationTarget.Global;
-  await config.update("models", models, target);
+  await config.update("models", existingModels, target);
 
   provider?.refreshModelPicker();
 
-  vscode.window.showInformationMessage(`模型 "${name}" 已添加！请在 Copilot Chat 中选择使用。`);
+  vscode.window.showInformationMessage(`已添加 ${selectedModels.length} 个模型！请在 Copilot Chat 中选择使用。`);
+}
+
+async function fetchAvailableModels(baseUrl: string, apiKey: string): Promise<string[]> {
+  const url = baseUrl.replace(/\/$/, "") + "/models";
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (apiKey) {
+    headers["Authorization"] = `Bearer ${apiKey}`;
+  }
+
+  log(`Fetching models from: ${url}`);
+  const response = await fetch(url, { method: "GET", headers });
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+  }
+
+  const data = await response.json() as { data?: Array<{ id: string }> };
+  const models = (data.data || []).map((m) => m.id).filter((id) => !!id);
+  log(`Fetched ${models.length} models from API`);
+  return models;
 }
 
 function showConfigPanel(context: vscode.ExtensionContext): void {
@@ -379,6 +423,18 @@ function getConfigHtml(): string {
       justify-content: flex-end;
       gap: 8px;
     }
+    #fetchBtn {
+      margin-top: 4px;
+    }
+    #modelSelector {
+      width: 100%;
+      padding: 8px;
+      background: var(--vscode-input-background);
+      border: 1px solid var(--vscode-input-border);
+      border-radius: 4px;
+      color: var(--vscode-input-foreground);
+      margin-bottom: 6px;
+    }
   </style>
 </head>
 <body>
@@ -391,10 +447,15 @@ function getConfigHtml(): string {
   </div>
 
   <div class="quick-add">
+    <button class="provider-btn" onclick="quickAdd('step')">阶跃星辰</button>
+    <button class="provider-btn" onclick="quickAdd('zhipu')">智谱 AI</button>
+    <button class="provider-btn" onclick="quickAdd('moonshot')">月之暗面</button>
+    <button class="provider-btn" onclick="quickAdd('deepseek')">DeepSeek</button>
+    <button class="provider-btn" onclick="quickAdd('baichuan')">百川</button>
+    <button class="provider-btn" onclick="quickAdd('yi')">零一万物</button>
     <button class="provider-btn" onclick="quickAdd('openai')">OpenAI</button>
     <button class="provider-btn" onclick="quickAdd('anthropic')">Anthropic</button>
     <button class="provider-btn" onclick="quickAdd('ollama')">Ollama</button>
-    <button class="provider-btn" onclick="quickAdd('lmstudio')">LM Studio</button>
     <button class="provider-btn" onclick="quickAdd('custom')">自定义</button>
   </div>
 
@@ -411,10 +472,15 @@ function getConfigHtml(): string {
         <div class="form-group">
           <label>提供商</label>
           <select id="modelProvider" onchange="onProviderChange()">
-            <option value="openai">OpenAI 兼容</option>
+            <option value="step">阶跃星辰 (Step)</option>
+            <option value="zhipu">智谱 AI (GLM)</option>
+            <option value="moonshot">月之暗面 (Moonshot)</option>
+            <option value="deepseek">DeepSeek</option>
+            <option value="baichuan">百川 (Baichuan)</option>
+            <option value="yi">零一万物 (Yi)</option>
+            <option value="openai">OpenAI</option>
             <option value="anthropic">Anthropic (Claude)</option>
             <option value="ollama">Ollama</option>
-            <option value="lmstudio">LM Studio</option>
             <option value="custom">自定义</option>
           </select>
         </div>
@@ -427,8 +493,14 @@ function getConfigHtml(): string {
           <input type="password" id="apiKey" placeholder="sk-...">
         </div>
         <div class="form-group">
+          <button class="btn btn-primary" onclick="fetchModels()" id="fetchBtn" style="width:100%">获取可用模型列表</button>
+        </div>
+        <div class="form-group">
           <label>模型名称</label>
-          <input type="text" id="modelName2" placeholder="gpt-4-turbo-preview">
+          <select id="modelSelector" style="display:none" onchange="onModelSelect()">
+            <option value="">-- 选择模型 --</option>
+          </select>
+          <input type="text" id="modelName2" placeholder="手动输入模型名称，或点击上方按钮自动获取">
         </div>
       </div>
       <div class="modal-footer">
@@ -444,10 +516,15 @@ function getConfigHtml(): string {
     let editingId = null;
 
     const defaults = {
-      openai: { baseUrl: 'https://api.openai.com/v1', modelName: 'gpt-4-turbo-preview' },
-      anthropic: { baseUrl: 'https://api.anthropic.com/v1', modelName: 'claude-3-sonnet-20240229' },
-      ollama: { baseUrl: 'http://localhost:11434/v1', modelName: 'llama2' },
-      lmstudio: { baseUrl: 'http://localhost:1234/v1', modelName: 'local-model' },
+      step: { baseUrl: 'https://api.stepfun.com/v1', modelName: '' },
+      zhipu: { baseUrl: 'https://open.bigmodel.cn/api/paas/v4', modelName: '' },
+      moonshot: { baseUrl: 'https://api.moonshot.cn/v1', modelName: '' },
+      deepseek: { baseUrl: 'https://api.deepseek.com/v1', modelName: '' },
+      baichuan: { baseUrl: 'https://api.baichuan-ai.com/v1', modelName: '' },
+      yi: { baseUrl: 'https://api.lingyiwanwu.com/v1', modelName: '' },
+      openai: { baseUrl: 'https://api.openai.com/v1', modelName: '' },
+      anthropic: { baseUrl: 'https://api.anthropic.com/v1', modelName: '' },
+      ollama: { baseUrl: 'http://localhost:11434/v1', modelName: '' },
       custom: { baseUrl: '', modelName: '' }
     };
 
@@ -489,10 +566,11 @@ function getConfigHtml(): string {
       document.getElementById('modalTitle').textContent = '添加模型';
       document.getElementById('saveBtn').textContent = '添加';
       document.getElementById('modelName').value = '';
-      document.getElementById('modelProvider').value = 'openai';
+      document.getElementById('modelProvider').value = 'step';
       document.getElementById('baseUrl').value = '';
       document.getElementById('apiKey').value = '';
       document.getElementById('modelName2').value = '';
+      document.getElementById('modelSelector').style.display = 'none';
       document.getElementById('modal').classList.add('show');
     }
 
@@ -508,6 +586,7 @@ function getConfigHtml(): string {
       document.getElementById('baseUrl').value = model.baseUrl;
       document.getElementById('apiKey').value = model.apiKey || '';
       document.getElementById('modelName2').value = model.modelName;
+      document.getElementById('modelSelector').style.display = 'none';
       document.getElementById('modal').classList.add('show');
     }
 
@@ -522,18 +601,78 @@ function getConfigHtml(): string {
         if (!document.getElementById('baseUrl').value) {
           document.getElementById('baseUrl').value = d.baseUrl;
         }
-        if (!document.getElementById('modelName2').value) {
-          document.getElementById('modelName2').value = d.modelName;
-        }
       }
+    }
+
+    function onModelSelect() {
+      const selector = document.getElementById('modelSelector');
+      const input = document.getElementById('modelName2');
+      if (selector.value) {
+        input.value = selector.value;
+      }
+    }
+
+    async function fetchModels() {
+      const baseUrl = document.getElementById('baseUrl').value.trim();
+      const apiKey = document.getElementById('apiKey').value.trim();
+      const btn = document.getElementById('fetchBtn');
+      const selector = document.getElementById('modelSelector');
+
+      if (!baseUrl) {
+        alert('请先填写 Base URL');
+        return;
+      }
+
+      btn.textContent = '获取中...';
+      btn.disabled = true;
+
+      try {
+        const url = baseUrl.replace(/\/$/, '') + '/models';
+        const headers = { 'Content-Type': 'application/json' };
+        if (apiKey) {
+          headers['Authorization'] = 'Bearer ' + apiKey;
+        }
+
+        const response = await fetch(url, { method: 'GET', headers });
+        if (!response.ok) {
+          throw new Error('HTTP ' + response.status + ': ' + await response.text());
+        }
+
+        const data = await response.json();
+        const modelIds = (data.data || []).map(m => m.id).filter(id => !!id);
+
+        if (modelIds.length > 0) {
+          selector.innerHTML = '<option value="">-- 选择模型 --</option>';
+          modelIds.forEach(id => {
+            const opt = document.createElement('option');
+            opt.value = id;
+            opt.textContent = id;
+            selector.appendChild(opt);
+          });
+          selector.style.display = 'block';
+          btn.textContent = '获取成功！';
+        } else {
+          alert('未获取到模型列表，请手动输入模型名称');
+          selector.style.display = 'none';
+          btn.textContent = '获取可用模型列表';
+        }
+      } catch (err) {
+        alert('获取模型失败: ' + err.message);
+        selector.style.display = 'none';
+        btn.textContent = '获取可用模型列表';
+      }
+
+      btn.disabled = false;
     }
 
     function quickAdd(provider) {
       const d = defaults[provider];
       document.getElementById('modelProvider').value = provider;
       document.getElementById('baseUrl').value = d.baseUrl;
-      document.getElementById('modelName2').value = d.modelName;
-      document.getElementById('modelName').value = provider.charAt(0).toUpperCase() + provider.slice(1);
+      document.getElementById('modelName2').value = '';
+      document.getElementById('modelName').value = '';
+      document.getElementById('apiKey').value = '';
+      document.getElementById('modelSelector').style.display = 'none';
       document.getElementById('modal').classList.add('show');
     }
 
@@ -543,15 +682,24 @@ function getConfigHtml(): string {
       const baseUrl = document.getElementById('baseUrl').value.trim();
       const apiKey = document.getElementById('apiKey').value;
       const modelName = document.getElementById('modelName2').value.trim();
+      const selector = document.getElementById('modelSelector');
 
-      if (!name || !baseUrl || !modelName) {
-        alert('请填写所有必填字段');
+      if (!baseUrl) {
+        alert('请填写 Base URL');
         return;
       }
 
+      const finalModelName = modelName || selector.value;
+      if (!finalModelName) {
+        alert('请选择或输入模型名称');
+        return;
+      }
+
+      const displayName = name || (provider.charAt(0).toUpperCase() + provider.slice(1) + ' - ' + finalModelName);
+
       vscode.postMessage({
         type: 'saveModel',
-        model: { id: editingId, name, provider, baseUrl, apiKey, modelName }
+        model: { id: editingId, name: displayName, provider, baseUrl, apiKey, modelName: finalModelName }
       });
 
       hideModal();
