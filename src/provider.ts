@@ -56,7 +56,8 @@ export class CustomAIProvider {
         imageInput: false,
         toolCalling: false,
       },
-      detail: `${model.provider} - ${model.baseUrl}`,
+      detail: hasApiKey ? `${model.provider} - ${model.baseUrl}` : `${model.provider} - API Key 未设置`,
+      tooltip: hasApiKey ? undefined : "请先配置 API Key",
     };
   }
 
@@ -96,10 +97,15 @@ export class CustomAIProvider {
     const systemMessage = apiMessages.find((m) => m.role === "system");
     const chatMessages = apiMessages.filter((m) => m.role !== "system");
 
+    const config = vscode.workspace.getConfiguration("customai");
+    const temperature = config.get<number>("defaultTemperature", 0.7);
+    const maxTokens = config.get<number>("defaultMaxTokens", 4096);
+
     const body: Record<string, unknown> = {
       model: model.modelName,
       messages: chatMessages,
       stream: true,
+      temperature,
     };
 
     if (systemMessage) {
@@ -118,11 +124,13 @@ export class CustomAIProvider {
         headers["anthropic-version"] = "2023-06-01";
         endpoint += "/messages";
         delete body.model;
+        delete body.temperature;
         (body as Record<string, unknown>).model = model.modelName;
-        (body as Record<string, unknown>).max_tokens = 4096;
+        (body as Record<string, unknown>).max_tokens = maxTokens;
       } else {
         headers["Authorization"] = `Bearer ${model.apiKey}`;
         endpoint += "/chat/completions";
+        (body as Record<string, unknown>).max_tokens = maxTokens;
       }
     }
 
