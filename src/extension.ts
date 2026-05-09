@@ -7,6 +7,44 @@ let configPanel: vscode.WebviewPanel | undefined;
 export function activate(context: vscode.ExtensionContext): void {
   provider = new CustomAIProvider(context);
 
+  // Register chat participant for setup
+  const setupParticipant = vscode.chat.createChatParticipant(
+    "customai.setup",
+    async (request, context, stream, token) => {
+      const prompt = request.prompt.toLowerCase();
+
+      if (prompt.includes("add") || prompt.includes("添加") || prompt.includes("配置")) {
+        stream.markdown(`# 添加自定义模型
+
+请选择一个选项来添加模型：
+
+1. **OpenAI** - GPT-4, GPT-3.5
+2. **Anthropic** - Claude 3
+3. **Ollama** - 本地模型
+4. **LM Studio** - 本地模型
+5. **自定义 API** - 任何 OpenAI 兼容 API
+
+或者点击按钮直接添加：
+
+- 运行命令 **"Custom AI: Quick Add Model"** 快速添加
+- 运行命令 **"Custom AI: Open Config"** 打开配置面板
+`);
+        return;
+      }
+
+      stream.markdown(`# Custom AI Setup
+
+To add a model, run the command:
+\`Custom AI: Add Model\` or \`Custom AI: Quick Add Model\`
+
+You can also open the config panel with:
+\`Custom AI: Open Config\`
+`);
+    }
+  );
+
+  context.subscriptions.push(setupParticipant);
+
   context.subscriptions.push(
     vscode.commands.registerCommand("customai.openConfig", () => {
       showConfigPanel(context);
@@ -20,10 +58,103 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   context.subscriptions.push(
+    vscode.commands.registerCommand("customai.addModelQuick", async () => {
+      await quickAddModel();
+    })
+  );
+
+  context.subscriptions.push(
     vscode.lm.registerLanguageModelChatProvider("customai", provider)
   );
 
   provider.refreshModelPicker();
+}
+
+async function quickAddModel(): Promise<void> {
+  const items: vscode.QuickPickItem[] = [
+    { label: "$(gear) OpenAI", description: "GPT-4, GPT-3.5 Turbo", alwaysShow: true },
+    { label: "$(gear) Anthropic (Claude)", description: "Claude 3 Sonnet, Opus, Haiku", alwaysShow: true },
+    { label: "$(gear) Ollama", description: "本地模型 (Llama2, Mistral等)", alwaysShow: true },
+    { label: "$(gear) LM Studio", description: "本地模型 via LM Studio", alwaysShow: true },
+    { label: "$(gear) 自定义 API", description: "任何 OpenAI 兼容 API", alwaysShow: true },
+  ];
+
+  const selected = await vscode.window.showQuickPick(items, {
+    placeHolder: "选择要添加的模型提供商",
+    title: "快速添加自定义模型",
+    matchOnDescription: true,
+  });
+
+  if (!selected) return;
+
+  const providerMap: Record<string, string> = {
+    "openai": "openai",
+    "anthropic": "anthropic",
+    "ollama": "ollama",
+    "lm studio": "lmstudio",
+    "自定义 api": "custom",
+  };
+
+  const selectedProvider = providerMap[selected.label.toLowerCase().replace(/^\$\(gear\)\s*/, "")] || "custom";
+
+  const defaults: Record<string, { baseUrl: string; modelName: string }> = {
+    openai: { baseUrl: "https://api.openai.com/v1", modelName: "gpt-4-turbo-preview" },
+    anthropic: { baseUrl: "https://api.anthropic.com/v1", modelName: "claude-3-sonnet-20240229" },
+    ollama: { baseUrl: "http://localhost:11434/v1", modelName: "llama2" },
+    lmstudio: { baseUrl: "http://localhost:1234/v1", modelName: "local-model" },
+    custom: { baseUrl: "", modelName: "" },
+  };
+
+  const d = defaults[selectedProvider] || defaults.custom;
+  const displayName = selected.label.replace(/^\$\(gear\)\s*/, "");
+
+  const name = await vscode.window.showInputBox({
+    prompt: "输入模型显示名称",
+    value: displayName,
+    validateInput: (value) => (value.trim() ? null : "名称不能为空"),
+  });
+
+  if (!name) return;
+
+  const baseUrl = await vscode.window.showInputBox({
+    prompt: "输入 Base URL",
+    value: d.baseUrl,
+    validateInput: (value) => (value.trim() ? null : "URL 不能为空"),
+  });
+
+  if (!baseUrl) return;
+
+  const modelName = await vscode.window.showInputBox({
+    prompt: "输入模型名称",
+    value: d.modelName,
+    validateInput: (value) => (value.trim() ? null : "模型名称不能为空"),
+  });
+
+  if (!modelName) return;
+
+  const apiKey = await vscode.window.showInputBox({
+    prompt: "输入 API Key（可选）",
+    password: true,
+  });
+
+  const model = {
+    id: Date.now().toString(),
+    name: name.trim(),
+    provider: selectedProvider,
+    baseUrl: baseUrl.trim(),
+    apiKey: apiKey?.trim() || "",
+    modelName: modelName.trim(),
+    enabled: true,
+  };
+
+  const config = vscode.workspace.getConfiguration("customai");
+  const models = config.get<any[]>("models", []) || [];
+  models.push(model);
+  await config.update("models", models, vscode.ConfigurationTarget.Workspace);
+
+  provider?.refreshModelPicker();
+
+  vscode.window.showInformationMessage(`模型 "${name}" 已添加！请在 Copilot Chat 中选择使用。`);
 }
 
 function showConfigPanel(context: vscode.ExtensionContext): void {
@@ -42,7 +173,7 @@ function showConfigPanel(context: vscode.ExtensionContext): void {
     }
   );
 
-  configPanel.webview.html = getConfigHtml(context);
+  configPanel.webview.html = getConfigHtml();
 
   configPanel.webview.onDidReceiveMessage(async (message) => {
     switch (message.type) {
@@ -100,7 +231,7 @@ async function deleteModel(id: string): Promise<void> {
   configPanel?.webview.postMessage({ type: "models", models });
 }
 
-function getConfigHtml(context: vscode.ExtensionContext): string {
+function getConfigHtml(): string {
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -133,10 +264,7 @@ function getConfigHtml(context: vscode.ExtensionContext): string {
       background: var(--vscode-button-background);
       color: var(--vscode-button-foreground);
     }
-    .btn-danger {
-      background: #f14c4c;
-      color: white;
-    }
+    .btn-danger { background: #f14c4c; color: white; }
     .model-card {
       background: var(--vscode-textCodeBlock-background);
       border: 1px solid var(--vscode-widget-border);
@@ -155,11 +283,23 @@ function getConfigHtml(context: vscode.ExtensionContext): string {
     .model-info { font-size: 11px; color: var(--vscode-descriptionForeground); margin-top: 6px; word-break: break-all; }
     .model-actions { display: flex; gap: 8px; margin-top: 10px; }
     .btn-sm { padding: 4px 8px; font-size: 11px; }
-    .empty {
-      text-align: center;
-      padding: 40px;
-      color: var(--vscode-descriptionForeground);
+    .empty { text-align: center; padding: 40px; color: var(--vscode-descriptionForeground); }
+    .quick-add {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 15px;
+      flex-wrap: wrap;
     }
+    .provider-btn {
+      padding: 6px 12px;
+      font-size: 11px;
+      background: var(--vscode-textCodeBlock-background);
+      border: 1px solid var(--vscode-widget-border);
+      border-radius: 4px;
+      color: var(--vscode-editor-foreground);
+      cursor: pointer;
+    }
+    .provider-btn:hover { border-color: var(--vscode-focusBorder); }
     .modal {
       display: none;
       position: fixed;
@@ -205,22 +345,6 @@ function getConfigHtml(context: vscode.ExtensionContext): string {
       justify-content: flex-end;
       gap: 8px;
     }
-    .quick-add {
-      display: flex;
-      gap: 8px;
-      margin-bottom: 15px;
-      flex-wrap: wrap;
-    }
-    .provider-btn {
-      padding: 6px 12px;
-      font-size: 11px;
-      background: var(--vscode-textCodeBlock-background);
-      border: 1px solid var(--vscode-widget-border);
-      border-radius: 4px;
-      color: var(--vscode-editor-foreground);
-      cursor: pointer;
-    }
-    .provider-btn:hover { border-color: var(--vscode-focusBorder); }
   </style>
 </head>
 <body>

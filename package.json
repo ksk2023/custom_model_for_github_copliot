@@ -2,7 +2,7 @@
   "name": "custom-copilot-chat",
   "displayName": "Custom Copilot Chat",
   "description": "Add custom AI models to GitHub Copilot Chat model picker - OpenAI, Claude, Ollama, and any OpenAI-compatible API",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "publisher": "custom-copilot",
   "repository": "https://github.com/ksk2023/custom_model_for_github_copliot",
   "engines": {
@@ -40,6 +40,13 @@
         "displayName": "Custom AI"
       }
     ],
+    "chatParticipants": [
+      {
+        "id": "customai.setup",
+        "name": "CustomAI",
+        "description": "Add or manage custom AI models"
+      }
+    ],
     "commands": [
       {
         "command": "customai.openConfig",
@@ -50,8 +57,8 @@
         "title": "Add Custom Model"
       },
       {
-        "command": "customai.setApiKey",
-        "title": "Set API Key for Model"
+        "command": "customai.addModelQuick",
+        "title": "Quick Add Custom Model"
       }
     ],
     "configuration": {
