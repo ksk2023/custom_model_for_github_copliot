@@ -1,0 +1,92 @@
+{
+  "name": "custom-copilot-chat",
+  "displayName": "Custom Copilot Chat",
+  "description": "Add custom AI models to GitHub Copilot Chat - configure your own API endpoints, API keys, and models",
+  "version": "1.0.0",
+  "publisher": "custom-copilot",
+  "engines": {
+    "vscode": "^1.99.0"
+  },
+  "categories": [
+    "Chat",
+    "AI",
+    "Machine Learning"
+  ],
+  "keywords": [
+    "copilot",
+    "github-copilot",
+    "chat",
+    "ai",
+    "openai",
+    "claude",
+    "custom-model",
+    "api"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "extensionDependencies": [
+    "github.copilot-chat"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "chatParticipants": [
+      {
+        "id": "custom-copilot",
+        "name": "Custom AI",
+        "description": "Chat with your custom AI models - configure your own API endpoints",
+        "isStationary": false
+      }
+    ],
+    "viewsContainers": {
+      "panel": [
+        {
+          "id": "custom-copilot-config",
+          "title": "Custom AI Config"
+        }
+      ]
+    },
+    "views": {
+      "custom-copilot-config": [
+        {
+          "id": "custom-copilot-config-view",
+          "type": "webview"
+        }
+      ]
+    },
+    "webviewViews": [
+      {
+        "id": "custom-copilot-config-view",
+        "name": "Custom AI Configuration",
+        "where": "panel"
+      }
+    ],
+    "configuration": {
+      "title": "Custom Copilot Chat",
+      "properties": {
+        "customCopilot.models": {
+          "type": "array",
+          "default": [],
+          "description": "List of custom AI models"
+        },
+        "customCopilot.debug": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable debug mode"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "build": "npm run compile && vsce package --pre-release --allow-missing-repository"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.99.0",
+    "@vscode/vsce": "^3.0.0",
+    "typescript": "^5.3.0"
+  }
+}
