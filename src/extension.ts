@@ -150,7 +150,11 @@ async function quickAddModel(): Promise<void> {
   const config = vscode.workspace.getConfiguration("customai");
   const models = config.get<any[]>("models", []) || [];
   models.push(model);
-  await config.update("models", models, vscode.ConfigurationTarget.Workspace);
+  
+  const target = vscode.workspace.workspaceFolders 
+    ? vscode.ConfigurationTarget.Workspace 
+    : vscode.ConfigurationTarget.Global;
+  await config.update("models", models, target);
 
   provider?.refreshModelPicker();
 
@@ -220,14 +224,20 @@ async function saveModel(model: any): Promise<void> {
     models.push(model);
   }
 
-  await config.update("models", models, vscode.ConfigurationTarget.Workspace);
+  const target = vscode.workspace.workspaceFolders
+    ? vscode.ConfigurationTarget.Workspace
+    : vscode.ConfigurationTarget.Global;
+  await config.update("models", models, target);
   configPanel?.webview.postMessage({ type: "models", models });
 }
 
 async function deleteModel(id: string): Promise<void> {
   const config = vscode.workspace.getConfiguration("customai");
   const models = getModels().filter((m: any) => m.id !== id);
-  await config.update("models", models, vscode.ConfigurationTarget.Workspace);
+  const target = vscode.workspace.workspaceFolders
+    ? vscode.ConfigurationTarget.Workspace
+    : vscode.ConfigurationTarget.Global;
+  await config.update("models", models, target);
   configPanel?.webview.postMessage({ type: "models", models });
 }
 

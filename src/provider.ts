@@ -78,6 +78,9 @@ export class CustomAIProvider {
     for (const msg of messages) {
       if (msg.role === vscode.LanguageModelChatMessageRole.User) {
         const textContent = this.extractTextContent(msg.content);
+        if (!textContent && msg.content.length > 0) {
+          throw new Error(`抱歉，"${model.name}" 不支持图片输入。请只发送文本内容。\n\nSorry, "${model.name}" does not support image input. Please send text only.`);
+        }
         if (textContent) {
           apiMessages.push({ role: "user", content: textContent });
         }
