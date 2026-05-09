@@ -257,9 +257,22 @@ function showConfigPanel(context: vscode.ExtensionContext): void {
         await saveModel(message.model);
         provider?.refreshModelPicker();
         break;
-      case "deleteModel":
-        await deleteModel(message.id);
-        provider?.refreshModelPicker();
+      case "fetchModels":
+        try {
+          const fetchedModels = await fetchAvailableModels(
+            message.baseUrl,
+            message.apiKey || ""
+          );
+          configPanel?.webview.postMessage({
+            type: "modelsFetched",
+            models: fetchedModels,
+          });
+        } catch (err: any) {
+          configPanel?.webview.postMessage({
+            type: "modelsFetchError",
+            error: err.message,
+          });
+        }
         break;
       case "openSettings":
         vscode.commands.executeCommand("workbench.action.openSettings", "customai.models");
@@ -292,16 +305,6 @@ async function saveModel(model: any): Promise<void> {
     models.push(model);
   }
 
-  const target = vscode.workspace.workspaceFolders
-    ? vscode.ConfigurationTarget.Workspace
-    : vscode.ConfigurationTarget.Global;
-  await config.update("models", models, target);
-  configPanel?.webview.postMessage({ type: "models", models });
-}
-
-async function deleteModel(id: string): Promise<void> {
-  const config = vscode.workspace.getConfiguration("customai");
-  const models = getModels().filter((m: any) => m.id !== id);
   const target = vscode.workspace.workspaceFolders
     ? vscode.ConfigurationTarget.Workspace
     : vscode.ConfigurationTarget.Global;
@@ -391,8 +394,8 @@ function getConfigHtml(): string {
       background: var(--vscode-editor-background);
       border: 1px solid var(--vscode-widget-border);
       border-radius: 8px;
-      width: 450px;
-      max-height: 80vh;
+      width: 500px;
+      max-height: 85vh;
       overflow-y: auto;
     }
     .modal-header {
@@ -416,6 +419,10 @@ function getConfigHtml(): string {
       border-radius: 4px;
       color: var(--vscode-input-foreground);
     }
+    .form-group input:disabled, .form-group select:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
     .modal-footer {
       padding: 12px 15px;
       border-top: 1px solid var(--vscode-widget-border);
@@ -426,14 +433,26 @@ function getConfigHtml(): string {
     #fetchBtn {
       margin-top: 4px;
     }
-    #modelSelector {
-      width: 100%;
-      padding: 8px;
-      background: var(--vscode-input-background);
+    #modelCheckboxContainer {
+      max-height: 200px;
+      overflow-y: auto;
       border: 1px solid var(--vscode-input-border);
       border-radius: 4px;
+      padding: 8px;
+      background: var(--vscode-input-background);
+      display: none;
+    }
+    #modelCheckboxContainer label {
+      display: flex;
+      align-items: center;
+      padding: 3px 0;
+      cursor: pointer;
+      font-size: 12px;
       color: var(--vscode-input-foreground);
-      margin-bottom: 6px;
+    }
+    #modelCheckboxContainer input[type="checkbox"] {
+      margin-right: 8px;
+      width: auto;
     }
   </style>
 </head>
@@ -492,20 +511,21 @@ function getConfigHtml(): string {
           <label>API Key</label>
           <input type="password" id="apiKey" placeholder="sk-...">
         </div>
-        <div class="form-group">
+        <div class="form-group" id="fetchBtnGroup">
           <button class="btn btn-primary" onclick="fetchModels()" id="fetchBtn" style="width:100%">获取可用模型列表</button>
+        </div>
+        <div class="form-group" id="modelCheckboxGroup" style="display:none">
+          <label>勾选要启用的模型</label>
+          <div id="modelCheckboxContainer"></div>
         </div>
         <div class="form-group">
           <label>模型名称</label>
-          <select id="modelSelector" style="display:none" onchange="onModelSelect()">
-            <option value="">-- 选择模型 --</option>
-          </select>
-          <input type="text" id="modelName2" placeholder="手动输入模型名称，或点击上方按钮自动获取">
+          <input type="text" id="modelName2" placeholder="手动输入模型名称，或从上方列表勾选">
         </div>
       </div>
       <div class="modal-footer">
         <button class="btn btn-primary" onclick="hideModal()">取消</button>
-        <button class="btn btn-primary" onclick="saveModel()" id="saveBtn">添加</button>
+        <button class="btn btn-primary" onclick="saveModels()" id="saveBtn">添加</button>
       </div>
     </div>
   </div>
@@ -514,18 +534,19 @@ function getConfigHtml(): string {
     const vscode = acquireVsCodeApi();
     let models = [];
     let editingId = null;
+    let fetchedModelList = [];
 
     const defaults = {
-      step: { baseUrl: 'https://api.stepfun.com/v1', modelName: '' },
-      zhipu: { baseUrl: 'https://open.bigmodel.cn/api/paas/v4', modelName: '' },
-      moonshot: { baseUrl: 'https://api.moonshot.cn/v1', modelName: '' },
-      deepseek: { baseUrl: 'https://api.deepseek.com/v1', modelName: '' },
-      baichuan: { baseUrl: 'https://api.baichuan-ai.com/v1', modelName: '' },
-      yi: { baseUrl: 'https://api.lingyiwanwu.com/v1', modelName: '' },
-      openai: { baseUrl: 'https://api.openai.com/v1', modelName: '' },
-      anthropic: { baseUrl: 'https://api.anthropic.com/v1', modelName: '' },
-      ollama: { baseUrl: 'http://localhost:11434/v1', modelName: '' },
-      custom: { baseUrl: '', modelName: '' }
+      step: { baseUrl: 'https://api.stepfun.com/v1' },
+      zhipu: { baseUrl: 'https://open.bigmodel.cn/api/paas/v4' },
+      moonshot: { baseUrl: 'https://api.moonshot.cn/v1' },
+      deepseek: { baseUrl: 'https://api.deepseek.com/v1' },
+      baichuan: { baseUrl: 'https://api.baichuan-ai.com/v1' },
+      yi: { baseUrl: 'https://api.lingyiwanwu.com/v1' },
+      openai: { baseUrl: 'https://api.openai.com/v1' },
+      anthropic: { baseUrl: 'https://api.anthropic.com/v1' },
+      ollama: { baseUrl: 'http://localhost:11434/v1' },
+      custom: { baseUrl: '' }
     };
 
     vscode.postMessage({ type: 'getModels' });
@@ -535,6 +556,17 @@ function getConfigHtml(): string {
       if (message.type === 'models') {
         models = message.models || [];
         renderModels();
+      }
+      if (message.type === 'modelsFetched') {
+        fetchedModelList = message.models || [];
+        renderModelCheckboxes();
+        document.getElementById('fetchBtn').textContent = '\u2705 获取成功！请勾选模型';
+        document.getElementById('fetchBtn').disabled = false;
+      }
+      if (message.type === 'modelsFetchError') {
+        alert('获取模型失败: ' + message.error);
+        document.getElementById('fetchBtn').textContent = '获取可用模型列表';
+        document.getElementById('fetchBtn').disabled = false;
       }
     });
 
@@ -555,7 +587,6 @@ function getConfigHtml(): string {
           <div class="model-info">URL: \${m.baseUrl}</div>
           <div class="model-actions">
             <button class="btn btn-primary btn-sm" onclick="editModel('\${btoa(m.id)}')">编辑</button>
-            <button class="btn btn-danger btn-sm" onclick="deleteModel('\${btoa(m.id)}')">删除</button>
           </div>
         </div>
       \`).join('');
@@ -563,14 +594,22 @@ function getConfigHtml(): string {
 
     function showAddModal() {
       editingId = null;
+      fetchedModelList = [];
       document.getElementById('modalTitle').textContent = '添加模型';
       document.getElementById('saveBtn').textContent = '添加';
       document.getElementById('modelName').value = '';
       document.getElementById('modelProvider').value = 'step';
+      document.getElementById('modelProvider').disabled = false;
       document.getElementById('baseUrl').value = '';
       document.getElementById('apiKey').value = '';
       document.getElementById('modelName2').value = '';
-      document.getElementById('modelSelector').style.display = 'none';
+      document.getElementById('modelName2').disabled = false;
+      document.getElementById('fetchBtnGroup').style.display = '';
+      document.getElementById('fetchBtn').textContent = '获取可用模型列表';
+      document.getElementById('fetchBtn').disabled = false;
+      document.getElementById('modelCheckboxGroup').style.display = 'none';
+      document.getElementById('modelCheckboxContainer').innerHTML = '';
+      document.getElementById('modelCheckboxContainer').style.display = 'none';
       document.getElementById('modal').classList.add('show');
     }
 
@@ -579,44 +618,46 @@ function getConfigHtml(): string {
       const model = models.find(m => m.id === decodedId);
       if (!model) return;
       editingId = decodedId;
+      fetchedModelList = [];
       document.getElementById('modalTitle').textContent = '编辑模型';
       document.getElementById('saveBtn').textContent = '保存';
       document.getElementById('modelName').value = model.name;
       document.getElementById('modelProvider').value = model.provider;
+      document.getElementById('modelProvider').disabled = true;
       document.getElementById('baseUrl').value = model.baseUrl;
       document.getElementById('apiKey').value = model.apiKey || '';
       document.getElementById('modelName2').value = model.modelName;
-      document.getElementById('modelSelector').style.display = 'none';
+      document.getElementById('modelName2').disabled = true;
+      document.getElementById('fetchBtnGroup').style.display = 'none';
+      document.getElementById('modelCheckboxGroup').style.display = 'none';
+      document.getElementById('modelCheckboxContainer').innerHTML = '';
+      document.getElementById('modelCheckboxContainer').style.display = 'none';
       document.getElementById('modal').classList.add('show');
     }
 
     function hideModal() {
       document.getElementById('modal').classList.remove('show');
+      document.getElementById('modelProvider').disabled = false;
+      document.getElementById('modelName2').disabled = false;
     }
 
     function onProviderChange() {
       const provider = document.getElementById('modelProvider').value;
       const d = defaults[provider];
-      if (d) {
-        if (!document.getElementById('baseUrl').value) {
-          document.getElementById('baseUrl').value = d.baseUrl;
-        }
+      if (d && !document.getElementById('baseUrl').value) {
+        document.getElementById('baseUrl').value = d.baseUrl;
       }
+      fetchedModelList = [];
+      document.getElementById('modelCheckboxContainer').innerHTML = '';
+      document.getElementById('modelCheckboxContainer').style.display = 'none';
+      document.getElementById('modelCheckboxGroup').style.display = 'none';
+      document.getElementById('fetchBtn').textContent = '获取可用模型列表';
     }
 
-    function onModelSelect() {
-      const selector = document.getElementById('modelSelector');
-      const input = document.getElementById('modelName2');
-      if (selector.value) {
-        input.value = selector.value;
-      }
-    }
-
-    async function fetchModels() {
+    function fetchModels() {
       const baseUrl = document.getElementById('baseUrl').value.trim();
       const apiKey = document.getElementById('apiKey').value.trim();
       const btn = document.getElementById('fetchBtn');
-      const selector = document.getElementById('modelSelector');
 
       if (!baseUrl) {
         alert('请先填写 Base URL');
@@ -626,89 +667,107 @@ function getConfigHtml(): string {
       btn.textContent = '获取中...';
       btn.disabled = true;
 
-      try {
-        const url = baseUrl.replace(/\/$/, '') + '/models';
-        const headers = { 'Content-Type': 'application/json' };
-        if (apiKey) {
-          headers['Authorization'] = 'Bearer ' + apiKey;
-        }
+      vscode.postMessage({
+        type: 'fetchModels',
+        baseUrl: baseUrl,
+        apiKey: apiKey
+      });
+    }
 
-        const response = await fetch(url, { method: 'GET', headers });
-        if (!response.ok) {
-          throw new Error('HTTP ' + response.status + ': ' + await response.text());
-        }
+    function renderModelCheckboxes() {
+      const container = document.getElementById('modelCheckboxContainer');
+      const group = document.getElementById('modelCheckboxGroup');
 
-        const data = await response.json();
-        const modelIds = (data.data || []).map(m => m.id).filter(id => !!id);
-
-        if (modelIds.length > 0) {
-          selector.innerHTML = '<option value="">-- 选择模型 --</option>';
-          modelIds.forEach(id => {
-            const opt = document.createElement('option');
-            opt.value = id;
-            opt.textContent = id;
-            selector.appendChild(opt);
-          });
-          selector.style.display = 'block';
-          btn.textContent = '获取成功！';
-        } else {
-          alert('未获取到模型列表，请手动输入模型名称');
-          selector.style.display = 'none';
-          btn.textContent = '获取可用模型列表';
-        }
-      } catch (err) {
-        alert('获取模型失败: ' + err.message);
-        selector.style.display = 'none';
-        btn.textContent = '获取可用模型列表';
+      if (fetchedModelList.length === 0) {
+        group.style.display = 'none';
+        container.style.display = 'none';
+        return;
       }
 
-      btn.disabled = false;
+      container.innerHTML = fetchedModelList.map((modelId, i) => \`
+        <label>
+          <input type="checkbox" value="\${modelId}" id="mc_\${i}" checked onchange="onModelCheckboxChange()">
+          \${modelId}
+        </label>
+      \`).join('');
+
+      container.style.display = 'block';
+      group.style.display = '';
+      onModelCheckboxChange();
+    }
+
+    function onModelCheckboxChange() {
+      const checked = document.querySelectorAll('#modelCheckboxContainer input[type="checkbox"]:checked');
+      const selected = Array.from(checked).map(cb => cb.value);
+      document.getElementById('modelName2').value = selected.join(', ');
     }
 
     function quickAdd(provider) {
       const d = defaults[provider];
+      fetchedModelList = [];
       document.getElementById('modelProvider').value = provider;
+      document.getElementById('modelProvider').disabled = false;
       document.getElementById('baseUrl').value = d.baseUrl;
       document.getElementById('modelName2').value = '';
+      document.getElementById('modelName2').disabled = false;
       document.getElementById('modelName').value = '';
       document.getElementById('apiKey').value = '';
-      document.getElementById('modelSelector').style.display = 'none';
+      document.getElementById('fetchBtnGroup').style.display = '';
+      document.getElementById('fetchBtn').textContent = '获取可用模型列表';
+      document.getElementById('fetchBtn').disabled = false;
+      document.getElementById('modelCheckboxGroup').style.display = 'none';
+      document.getElementById('modelCheckboxContainer').innerHTML = '';
+      document.getElementById('modelCheckboxContainer').style.display = 'none';
       document.getElementById('modal').classList.add('show');
     }
 
-    function saveModel() {
+    function saveModels() {
       const name = document.getElementById('modelName').value.trim();
       const provider = document.getElementById('modelProvider').value;
       const baseUrl = document.getElementById('baseUrl').value.trim();
       const apiKey = document.getElementById('apiKey').value;
-      const modelName = document.getElementById('modelName2').value.trim();
-      const selector = document.getElementById('modelSelector');
 
       if (!baseUrl) {
         alert('请填写 Base URL');
         return;
       }
 
-      const finalModelName = modelName || selector.value;
-      if (!finalModelName) {
-        alert('请选择或输入模型名称');
-        return;
+      if (editingId) {
+        const modelName = document.getElementById('modelName2').value.trim();
+        if (!modelName) {
+          alert('请输入模型名称');
+          return;
+        }
+        const displayName = name || (provider.charAt(0).toUpperCase() + provider.slice(1) + ' - ' + modelName);
+        vscode.postMessage({
+          type: 'saveModel',
+          model: { id: editingId, name: displayName, provider, baseUrl, apiKey, modelName: modelName }
+        });
+      } else {
+        const checkboxes = document.querySelectorAll('#modelCheckboxContainer input[type="checkbox"]:checked');
+        let selectedModels = Array.from(checkboxes).map(cb => cb.value);
+
+        if (selectedModels.length === 0) {
+          const manual = document.getElementById('modelName2').value.trim();
+          if (!manual) {
+            alert('请勾选模型或手动输入模型名称');
+            return;
+          }
+          selectedModels = [manual];
+        }
+
+        selectedModels.forEach(mName => {
+          const displayName = name
+            ? (selectedModels.length > 1 ? name + ' - ' + mName : name)
+            : (provider.charAt(0).toUpperCase() + provider.slice(1) + ' - ' + mName);
+          vscode.postMessage({
+            type: 'saveModel',
+            model: { id: null, name: displayName, provider, baseUrl, apiKey, modelName: mName }
+          });
+        });
       }
-
-      const displayName = name || (provider.charAt(0).toUpperCase() + provider.slice(1) + ' - ' + finalModelName);
-
-      vscode.postMessage({
-        type: 'saveModel',
-        model: { id: editingId, name: displayName, provider, baseUrl, apiKey, modelName: finalModelName }
-      });
 
       hideModal();
-    }
-
-    function deleteModel(id) {
-      if (confirm('确定要删除这个模型吗？')) {
-        vscode.postMessage({ type: 'deleteModel', id: atob(id) });
-      }
     }
 
     function openSettings() {
