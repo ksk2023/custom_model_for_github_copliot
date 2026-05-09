@@ -12,12 +12,15 @@ export interface AIModel {
 
 export function getModels(): AIModel[] {
   const config = vscode.workspace.getConfiguration("customai");
-  return config.get<AIModel[]>("models", []);
+  return config.get<AIModel[]>("models", []) || [];
 }
 
 export async function saveModels(models: AIModel[]): Promise<void> {
   const config = vscode.workspace.getConfiguration("customai");
-  await config.update("models", models, vscode.ConfigurationTarget.Workspace);
+  const target = vscode.workspace.workspaceFolders
+    ? vscode.ConfigurationTarget.Workspace
+    : vscode.ConfigurationTarget.Global;
+  await config.update("models", models, target);
 }
 
 export async function addModel(model: AIModel): Promise<void> {

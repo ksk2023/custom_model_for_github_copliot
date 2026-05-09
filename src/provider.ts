@@ -38,6 +38,7 @@ export class CustomAIProvider {
     }
 
     const models = getModels();
+    console.log(`[CustomAI] provideLanguageModelChatInformation called, returning ${models.length} models`);
     return models.map((model) => this.toChatInfo(model));
   }
 

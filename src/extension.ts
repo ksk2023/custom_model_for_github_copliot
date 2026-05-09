@@ -5,6 +5,11 @@ let provider: CustomAIProvider | undefined;
 let configPanel: vscode.WebviewPanel | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
+  console.log("[CustomAI] Extension activating...");
+  
+  const models = getModels();
+  console.log(`[CustomAI] Found ${models.length} models in config`);
+  
   provider = new CustomAIProvider(context);
 
   // Register chat participant for setup
@@ -60,6 +65,18 @@ You can also open the config panel with:
   context.subscriptions.push(
     vscode.commands.registerCommand("customai.addModelQuick", async () => {
       await quickAddModel();
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("customai.listModels", async () => {
+      const models = getModels();
+      if (models.length === 0) {
+        vscode.window.showInformationMessage("没有配置任何模型。请使用 'Custom AI: Quick Add Model' 添加。");
+      } else {
+        const list = models.map(m => `• ${m.name} (${m.provider}) - ${m.modelName}`).join("\n");
+        vscode.window.showInformationMessage(`已配置 ${models.length} 个模型:\n${list}`, { modal: true });
+      }
     })
   );
 
