@@ -75,12 +75,6 @@ export async function updateModel(model: AIModel): Promise<void> {
   }
 }
 
-export async function deleteModel(id: string): Promise<void> {
-  const models = getModels();
-  const filtered = models.filter((m) => m.id !== id);
-  await saveModels(filtered);
-}
-
 export async function toggleModel(id: string, enabled: boolean): Promise<void> {
   const models = getModels();
   const model = models.find((m) => m.id === id);
