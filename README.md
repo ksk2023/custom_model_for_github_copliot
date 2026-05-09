@@ -4,104 +4,106 @@
 
 ---
 
-## 功能特性
+## Features
 
-- **自定义模型支持** - 在 GitHub Copilot Chat 模型选择器中添加任何 OpenAI 兼容的 API
-- **多提供商支持** - OpenAI、Anthropic (Claude)、Ollama、LM Studio 等
-- **可视化配置** - 通过 VS Code 设置面板轻松配置 API 端点和密钥
-- **零配置快速开始** - 提供常用提供商的预设模板
+- **Custom Model Support** - Add any OpenAI-compatible API to GitHub Copilot Chat model picker
+- **Multi-Provider Support** - Chinese providers (Step, Zhipu, Moonshot, DeepSeek, Baichuan, Yi), OpenAI, Anthropic, Ollama, etc.
+- **Dynamic Model Fetching** - Automatically fetch available models from API endpoint
+- **Visual Configuration** - Easy setup through VS Code settings panel
+- **Quick Add** - Preset templates for popular providers
 
-## 支持的模型类型
+## Supported Providers
 
-| 提供商 | Base URL | 模型示例 |
-|--------|----------|----------|
-| OpenAI | `https://api.openai.com/v1` | `gpt-4-turbo-preview` |
-| Anthropic | `https://api.anthropic.com/v1` | `claude-3-sonnet-20240229` |
-| Ollama | `http://localhost:11434/v1` | `llama2` |
-| LM Studio | `http://localhost:1234/v1` | `local-model` |
-| 自定义 | 任何 OpenAI 兼容 API | 不同提供商各异 |
+| Provider | Base URL | Example Models |
+|----------|----------|----------------|
+| 阶跃星辰 (Step) | `https://api.stepfun.com/v1` | Step-1.5V, Step-2 |
+| 智谱 AI (GLM) | `https://open.bigmodel.cn/api/paas/v4` | GLM-4 |
+| 月之暗面 (Moonshot) | `https://api.moonshot.cn/v1` | moonshot-v1-8k/32k/128k |
+| DeepSeek | `https://api.deepseek.com/v1` | DeepSeek-V3, DeepSeek-R1 |
+| 百川 (Baichuan) | `https://api.baichuan-ai.com/v1` | Baichuan4 |
+| 零一万物 (Yi) | `https://api.lingyiwanwu.com/v1` | yi-large, yi-medium |
+| OpenAI | `https://api.openai.com/v1` | GPT-4o, GPT-4 |
+| Anthropic | `https://api.anthropic.com/v1` | Claude 3.5 Sonnet |
+| Ollama | `http://localhost:11434/v1` | Llama, Mistral |
+| Custom | Any OpenAI-compatible API | Varies |
 
-## 安装
+## Installation
 
-1. 下载 `.vsix` 文件
-2. 在 VS Code 中安装扩展：
+1. Download the `.vsix` file from [Releases](https://github.com/ksk2023/custom_model_for_github_copliot/releases)
+2. Install in VS Code:
    ```bash
-   code --install-extension custom-copilot-chat-1.0.0.vsix
+   code --install-extension custom-copilot-chat-1.0.9.vsix
    ```
-3. 或者直接在 VS Code 中双击 `.vsix` 文件安装
+3. Or double-click the `.vsix` file in VS Code
 
-## 配置
+## Quick Start
 
-### 方式一：通过设置面板
+1. Press `Ctrl+Shift+P` → type "Custom AI: Quick Add Model"
+2. Select a provider (e.g., 阶跃星辰)
+3. Enter Base URL and API Key
+4. Click "获取可用模型列表" to fetch available models
+5. Select models from the dropdown
+6. Open Copilot Chat and select your model
 
-1. 打开 VS Code 设置 (`Ctrl+,`)
-2. 搜索 "Custom Copilot Chat"
-3. 在 `customai.models` 中添加模型配置
+## Configuration
 
-### 方式二：通过命令
+### Method 1: Config Panel
 
-1. 按 `Ctrl+Shift+P` 打开命令面板
-2. 输入 "Custom AI: Open Config"
-3. 点击 "Add Model" 添加新模型
+1. Press `Ctrl+Shift+P` → "Custom AI: Open Config"
+2. Click "+ 添加模型"
+3. Fill in provider, Base URL, API Key
+4. Click "获取可用模型列表" to fetch models
+5. Select and save
 
-### 模型配置示例
+### Method 2: Settings JSON
 
 ```json
 {
   "customai.models": [
     {
       "id": "1234567890",
-      "name": "我的 GPT-4",
+      "name": "My GPT-4",
       "provider": "openai",
       "baseUrl": "https://api.openai.com/v1",
       "apiKey": "sk-...",
       "modelName": "gpt-4-turbo-preview",
-      "enabled": true
-    },
-    {
-      "id": "0987654321",
-      "name": "我的 Claude",
-      "provider": "anthropic",
-      "baseUrl": "https://api.anthropic.com/v1",
-      "apiKey": "sk-ant-...",
-      "modelName": "claude-3-sonnet-20240229",
       "enabled": true
     }
   ]
 }
 ```
 
-## 使用方法
+## Usage
 
-1. **打开 Copilot Chat** - 按 `Ctrl+Shift+I` (Windows/Linux) 或 `Cmd+Shift+I` (Mac)
-2. **选择模型** - 在模型下拉菜单中选择 "Custom AI" 下的你配置的模型
-3. **开始对话** - 像使用 Copilot 一样正常对话
+1. **Open Copilot Chat** - Press `Ctrl+Shift+I` (Windows/Linux) or `Cmd+Shift+I` (Mac)
+2. **Select Model** - Choose your configured model from the model dropdown
+3. **Start Chatting** - Chat normally like with Copilot
 
-## 常见问题
+## FAQ
 
-**Q: 模型没有出现在选择器中？**
-- 确保已安装并启用了扩展
-- 检查 `customai.models` 配置是否正确
-- 尝试重新加载 VS Code 窗口
+**Q: Models not showing in picker?**
+- Make sure the extension is installed and enabled
+- Check `customai.models` configuration
+- Try reloading VS Code window
 
-**Q: API 请求失败？**
-- 验证 API Key 是否正确
-- 检查 Base URL 是否可访问
-- 确认模型名称是否有效
+**Q: API request failed?**
+- Verify API Key is correct
+- Check if Base URL is accessible
+- Confirm model name is valid
 
-## 开发
+## Development
 
 ```bash
-# 安装依赖
+# Install dependencies
 npm install
 
-# 编译 TypeScript
+# Compile TypeScript
 npm run compile
 
-# 打包 vsix
+# Package vsix
 npm run build
 ```
 
-## 许可证
+## License
 
 MIT

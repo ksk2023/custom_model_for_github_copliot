@@ -7,44 +7,55 @@
 ## 功能特性
 
 - **自定义模型支持** - 在 GitHub Copilot Chat 模型选择器中添加任何 OpenAI 兼容的 API
-- **多提供商支持** - OpenAI、Anthropic (Claude)、Ollama、LM Studio 等
-- **可视化配置** - 通过 VS Code 设置面板轻松配置 API 端点和密钥
-- **零配置快速开始** - 提供常用提供商的预设模板
+- **国内模型预设** - 阶跃星辰、智谱AI、月之暗面、DeepSeek、百川、零一万物
+- **动态获取模型** - 填写 Base URL 和 API Key 后，自动从 API 获取可用模型列表
+- **可视化配置** - 通过 VS Code 设置面板轻松配置
+- **快速添加** - 常用提供商的预设模板
 
-## 支持的模型类型
+## 支持的提供商
 
-| 提供商 | Base URL | 模型示例 |
+| 提供商 | Base URL | 示例模型 |
 |--------|----------|----------|
-| OpenAI | `https://api.openai.com/v1` | `gpt-4-turbo-preview` |
-| Anthropic | `https://api.anthropic.com/v1` | `claude-3-sonnet-20240229` |
-| Ollama | `http://localhost:11434/v1` | `llama2` |
-| LM Studio | `http://localhost:1234/v1` | `local-model` |
+| 阶跃星辰 (Step) | `https://api.stepfun.com/v1` | Step-1.5V, Step-2 |
+| 智谱 AI (GLM) | `https://open.bigmodel.cn/api/paas/v4` | GLM-4 |
+| 月之暗面 (Moonshot) | `https://api.moonshot.cn/v1` | moonshot-v1-8k/32k/128k |
+| DeepSeek | `https://api.deepseek.com/v1` | DeepSeek-V3, DeepSeek-R1 |
+| 百川 (Baichuan) | `https://api.baichuan-ai.com/v1` | Baichuan4 |
+| 零一万物 (Yi) | `https://api.lingyiwanwu.com/v1` | yi-large, yi-medium |
+| OpenAI | `https://api.openai.com/v1` | GPT-4o, GPT-4 |
+| Anthropic | `https://api.anthropic.com/v1` | Claude 3.5 Sonnet |
+| Ollama | `http://localhost:11434/v1` | Llama, Mistral |
 | 自定义 | 任何 OpenAI 兼容 API | 不同提供商各异 |
 
 ## 安装
 
-1. 下载 `.vsix` 文件
-2. 在 VS Code 中安装扩展：
+1. 从 [Releases](https://github.com/ksk2023/custom_model_for_github_copliot/releases) 下载 `.vsix` 文件
+2. 在 VS Code 中安装：
    ```bash
-   code --install-extension custom-copilot-chat-1.0.0.vsix
+   code --install-extension custom-copilot-chat-1.0.9.vsix
    ```
 3. 或者直接在 VS Code 中双击 `.vsix` 文件安装
 
+## 快速开始
+
+1. 按 `Ctrl+Shift+P` → 输入 "Custom AI: Quick Add Model"
+2. 选择提供商（如阶跃星辰）
+3. 填写 Base URL 和 API Key
+4. 点击"获取可用模型列表"自动获取模型
+5. 从下拉列表选择要启用的模型
+6. 打开 Copilot Chat 选择你的模型
+
 ## 配置
 
-### 方式一：通过设置面板
+### 方式一：配置面板
 
-1. 打开 VS Code 设置 (`Ctrl+,`)
-2. 搜索 "Custom Copilot Chat"
-3. 在 `customai.models` 中添加模型配置
+1. 按 `Ctrl+Shift+P` → "Custom AI: Open Config"
+2. 点击 "+ 添加模型"
+3. 选择提供商，填写 Base URL 和 API Key
+4. 点击"获取可用模型列表"
+5. 选择模型并保存
 
-### 方式二：通过命令
-
-1. 按 `Ctrl+Shift+P` 打开命令面板
-2. 输入 "Custom AI: Open Config"
-3. 点击 "Add Model" 添加新模型
-
-### 模型配置示例
+### 方式二：设置 JSON
 
 ```json
 {
@@ -57,15 +68,6 @@
       "apiKey": "sk-...",
       "modelName": "gpt-4-turbo-preview",
       "enabled": true
-    },
-    {
-      "id": "0987654321",
-      "name": "我的 Claude",
-      "provider": "anthropic",
-      "baseUrl": "https://api.anthropic.com/v1",
-      "apiKey": "sk-ant-...",
-      "modelName": "claude-3-sonnet-20240229",
-      "enabled": true
     }
   ]
 }
@@ -74,7 +76,7 @@
 ## 使用方法
 
 1. **打开 Copilot Chat** - 按 `Ctrl+Shift+I` (Windows/Linux) 或 `Cmd+Shift+I` (Mac)
-2. **选择模型** - 在模型下拉菜单中选择 "Custom AI" 下的你配置的模型
+2. **选择模型** - 在模型下拉菜单中选择你配置的模型
 3. **开始对话** - 像使用 Copilot 一样正常对话
 
 ## 常见问题
