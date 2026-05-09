@@ -1,39 +1,30 @@
 import * as vscode from "vscode";
-import { ConfigViewProvider } from "./configView.js";
-import { ChatHandler } from "./chatHandler.js";
+import { CustomAIProvider } from "./provider.js";
 
-let configViewProvider: ConfigViewProvider | undefined;
-let chatHandler: ChatHandler | undefined;
+let provider: CustomAIProvider | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
-  chatHandler = new ChatHandler(context);
-
-  configViewProvider = new ConfigViewProvider(context, chatHandler);
-  context.subscriptions.push(
-    vscode.window.registerWebviewViewProvider(
-      "custom-copilot-config-view",
-      configViewProvider
-    )
-  );
+  provider = new CustomAIProvider(context);
 
   context.subscriptions.push(
-    vscode.chat.createChatParticipant("custom-copilot", chatHandler.getHandler())
-  );
-
-  context.subscriptions.push(
-    vscode.commands.registerCommand("custom-copilot.addModel", () => {
-      configViewProvider?.showAddModelDialog();
+    vscode.commands.registerCommand("customai.openConfig", () => {
+      vscode.commands.executeCommand("workbench.action.openSettings", "customai");
     })
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("custom-copilot.openConfig", () => {
-      vscode.commands.executeCommand("custom-copilot-config-view.focus");
+    vscode.commands.registerCommand("customai.addModel", () => {
+      vscode.commands.executeCommand("workbench.action.openSettings", "customai.models");
     })
   );
+
+  context.subscriptions.push(
+    vscode.lm.registerLanguageModelChatProvider("customai", provider)
+  );
+
+  provider.refreshModelPicker();
 }
 
 export function deactivate(): void {
-  configViewProvider?.dispose();
-  chatHandler?.dispose();
+  provider?.prepareForDeactivate();
 }

@@ -1,16 +1,21 @@
 {
   "name": "custom-copilot-chat",
   "displayName": "Custom Copilot Chat",
-  "description": "Add custom AI models to GitHub Copilot Chat - configure your own API endpoints, API keys, and models",
+  "description": "Add custom AI models to GitHub Copilot Chat model picker - OpenAI, Claude, Ollama, and any OpenAI-compatible API",
   "version": "1.0.0",
   "publisher": "custom-copilot",
   "engines": {
-    "vscode": "^1.99.0"
+    "vscode": "^1.116.0"
   },
+  "extensionDependencies": [
+    "github.copilot-chat"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
   "categories": [
-    "Chat",
     "AI",
-    "Machine Learning"
+    "Chat"
   ],
   "keywords": [
     "copilot",
@@ -19,57 +24,44 @@
     "ai",
     "openai",
     "claude",
+    "ollama",
     "custom-model",
     "api"
   ],
   "activationEvents": [
     "onStartupFinished"
   ],
-  "extensionDependencies": [
-    "github.copilot-chat"
-  ],
   "main": "./dist/extension.js",
   "contributes": {
-    "chatParticipants": [
+    "languageModelChatProviders": [
       {
-        "id": "custom-copilot",
-        "name": "Custom AI",
-        "description": "Chat with your custom AI models - configure your own API endpoints",
-        "isStationary": false
+        "vendor": "customai",
+        "displayName": "Custom AI"
       }
     ],
-    "viewsContainers": {
-      "panel": [
-        {
-          "id": "custom-copilot-config",
-          "title": "Custom AI Config"
-        }
-      ]
-    },
-    "views": {
-      "custom-copilot-config": [
-        {
-          "id": "custom-copilot-config-view",
-          "type": "webview"
-        }
-      ]
-    },
-    "webviewViews": [
+    "commands": [
       {
-        "id": "custom-copilot-config-view",
-        "name": "Custom AI Configuration",
-        "where": "panel"
+        "command": "customai.openConfig",
+        "title": "Open Custom AI Settings"
+      },
+      {
+        "command": "customai.addModel",
+        "title": "Add Custom Model"
+      },
+      {
+        "command": "customai.setApiKey",
+        "title": "Set API Key for Model"
       }
     ],
     "configuration": {
       "title": "Custom Copilot Chat",
       "properties": {
-        "customCopilot.models": {
+        "customai.models": {
           "type": "array",
           "default": [],
-          "description": "List of custom AI models"
+          "description": "Custom AI models configuration"
         },
-        "customCopilot.debug": {
+        "customai.debug": {
           "type": "boolean",
           "default": false,
           "description": "Enable debug mode"
@@ -85,7 +77,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
-    "@types/vscode": "^1.99.0",
+    "@types/vscode": "^1.116.0",
     "@vscode/vsce": "^3.0.0",
     "typescript": "^5.3.0"
   }
