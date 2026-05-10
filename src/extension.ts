@@ -1,26 +1,45 @@
 import * as vscode from "vscode";
 import { CustomAIProvider } from "./provider.js";
 import { initLogger, log } from "./logger.js";
+import { getWebviewContent } from "./webview.js";
+import { inferMaxInputTokens } from "./modelMetadata.js";
+import {
+  Provider,
+  AIModel,
+  getProviders,
+  saveProvider,
+  deleteProvider,
+  getModels,
+  saveModels,
+  migrateOldConfigIfNeeded,
+} from "./config.js";
 
 let provider: CustomAIProvider | undefined;
 let configPanel: vscode.WebviewPanel | undefined;
+
+interface FetchedModelInfo {
+  id: string;
+  maxInputTokens?: number;
+  reasoningEffortOptions?: string[];
+  thinkingTypeOptions?: string[];
+}
 
 export function activate(context: vscode.ExtensionContext): void {
   initLogger();
   log("Extension activating...");
 
+  const migrated = migrateOldConfigIfNeeded();
+  if (migrated) {
+    log("Migrated old config to new Provider/Model format");
+  }
+
   provider = new CustomAIProvider(context);
   log("CustomAIProvider created");
 
-  const models = getModels();
-  log(`Found ${models.length} models in config`);
-
-  // Register chat participant for setup
   const setupParticipant = vscode.chat.createChatParticipant(
     "customai.setup",
-    async (request, context, stream, token) => {
+    async (request, _chatCtx, stream, _token) => {
       const prompt = request.prompt.toLowerCase();
-
       if (prompt.includes("add") || prompt.includes("添加") || prompt.includes("配置")) {
         stream.markdown(`# 添加自定义模型
 
@@ -39,7 +58,6 @@ export function activate(context: vscode.ExtensionContext): void {
 `);
         return;
       }
-
       stream.markdown(`# Custom AI Setup
 
 To add a model, run the command:
@@ -50,34 +68,24 @@ You can also open the config panel with:
 `);
     }
   );
-
   context.subscriptions.push(setupParticipant);
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("customai.openConfig", () => {
-      showConfigPanel(context);
-    })
+    vscode.commands.registerCommand("customai.openConfig", () => showConfigPanel(context))
   );
-
   context.subscriptions.push(
-    vscode.commands.registerCommand("customai.addModel", () => {
-      showConfigPanel(context);
-    })
+    vscode.commands.registerCommand("customai.addModel", () => showConfigPanel(context))
   );
-
   context.subscriptions.push(
-    vscode.commands.registerCommand("customai.addModelQuick", async () => {
-      await quickAddModel();
-    })
+    vscode.commands.registerCommand("customai.addModelQuick", async () => await quickAddModel())
   );
-
   context.subscriptions.push(
     vscode.commands.registerCommand("customai.listModels", async () => {
       const models = getModels();
       if (models.length === 0) {
-        vscode.window.showInformationMessage("没有配置任何模型。请使用 'Custom AI: Quick Add Model' 添加。");
+        vscode.window.showInformationMessage("没有配置任何模型。请使用 'Custom AI: Open Config' 添加。");
       } else {
-        const list = models.map(m => `• ${m.name} (${m.provider}) - ${m.modelName}`).join("\n");
+        const list = models.map((m) => `• ${m.displayName} (${m.modelName})`).join("\n");
         vscode.window.showInformationMessage(`已配置 ${models.length} 个模型:\n${list}`, { modal: true });
       }
     })
@@ -94,6 +102,10 @@ You can also open the config panel with:
   log("Activation complete");
 }
 
+// ══════════════════════════════════════════════════════
+//  Quick Add Model (lightning-fast flow, no webview)
+// ══════════════════════════════════════════════════════
+
 async function quickAddModel(): Promise<void> {
   const items: vscode.QuickPickItem[] = [
     { label: "$(star-full) 阶跃星辰 (Step)", description: "Step-1.5V, Step-2 等", alwaysShow: true },
@@ -105,7 +117,6 @@ async function quickAddModel(): Promise<void> {
     { label: "$(gear) OpenAI", description: "GPT-4o, GPT-4, GPT-3.5", alwaysShow: true },
     { label: "$(gear) Anthropic (Claude)", description: "Claude 3.5 Sonnet, Opus", alwaysShow: true },
     { label: "$(gear) Ollama", description: "本地模型 (Llama, Mistral等)", alwaysShow: true },
-    { label: "$(gear) LM Studio", description: "本地模型 via LM Studio", alwaysShow: true },
     { label: "$(gear) 自定义 API", description: "任何 OpenAI 兼容 API", alwaysShow: true },
   ];
 
@@ -114,124 +125,302 @@ async function quickAddModel(): Promise<void> {
     title: "快速添加自定义模型",
     matchOnDescription: true,
   });
-
   if (!selected) return;
 
-  const providerKey = selected.label.replace(/^\$\(star-full\)\s*/, "").replace(/^\$\(gear\)\s*/, "").toLowerCase();
+  const labelText = selected.label.replace(/^\$\(star-full\)\s*/, "").replace(/^\$\(gear\)\s*/, "");
 
-  const defaults: Record<string, { baseUrl: string; apiKeyPlaceholder: string }> = {
-    "阶跃星辰 (step)": { baseUrl: "https://api.stepfun.com/v1", apiKeyPlaceholder: "Step API Key" },
-    "智谱 ai (glm)": { baseUrl: "https://open.bigmodel.cn/api/paas/v4", apiKeyPlaceholder: "智谱 API Key" },
-    "月之暗面 (moonshot)": { baseUrl: "https://api.moonshot.cn/v1", apiKeyPlaceholder: "Moonshot API Key" },
-    "deepseek": { baseUrl: "https://api.deepseek.com/v1", apiKeyPlaceholder: "DeepSeek API Key" },
-    "百川 (baichuan)": { baseUrl: "https://api.baichuan-ai.com/v1", apiKeyPlaceholder: "百川 API Key" },
-    "零一万物 (yi)": { baseUrl: "https://api.lingyiwanwu.com/v1", apiKeyPlaceholder: "零一万物 API Key" },
-    "openai": { baseUrl: "https://api.openai.com/v1", apiKeyPlaceholder: "sk-..." },
-    "anthropic (claude)": { baseUrl: "https://api.anthropic.com/v1", apiKeyPlaceholder: "sk-ant-..." },
-    "ollama": { baseUrl: "http://localhost:11434/v1", apiKeyPlaceholder: "" },
-    "lm studio": { baseUrl: "http://localhost:1234/v1", apiKeyPlaceholder: "" },
-    "自定义 api": { baseUrl: "", apiKeyPlaceholder: "API Key" },
+  const defaults: Record<string, { baseUrl: string; providerName: string }> = {
+    "阶跃星辰 (step)": { baseUrl: "https://api.stepfun.com/v1", providerName: "阶跃星辰" },
+    "智谱 ai (glm)": { baseUrl: "https://open.bigmodel.cn/api/paas/v4", providerName: "智谱AI" },
+    "月之暗面 (moonshot)": { baseUrl: "https://api.moonshot.cn/v1", providerName: "月之暗面" },
+    "deepseek": { baseUrl: "https://api.deepseek.com/v1", providerName: "DeepSeek" },
+    "百川 (baichuan)": { baseUrl: "https://api.baichuan-ai.com/v1", providerName: "百川" },
+    "零一万物 (yi)": { baseUrl: "https://api.lingyiwanwu.com/v1", providerName: "零一万物" },
+    "openai": { baseUrl: "https://api.openai.com/v1", providerName: "OpenAI" },
+    "anthropic (claude)": { baseUrl: "https://api.anthropic.com/v1", providerName: "Anthropic" },
+    "ollama": { baseUrl: "http://localhost:11434/v1", providerName: "Ollama" },
+    "自定义 api": { baseUrl: "", providerName: labelText },
   };
-
-  const d = defaults[providerKey] || defaults["自定义 api"];
+  const d = defaults[labelText.toLowerCase()] || defaults["自定义 api"];
 
   const baseUrl = await vscode.window.showInputBox({
     prompt: "输入 Base URL",
     value: d.baseUrl,
-    validateInput: (value) => (value.trim() ? null : "URL 不能为空"),
+    validateInput: (v) => (v.trim() ? null : "URL 不能为空"),
   });
-
   if (!baseUrl) return;
 
   const apiKey = await vscode.window.showInputBox({
     prompt: "输入 API Key",
     password: true,
-    placeHolder: d.apiKeyPlaceholder,
+    placeHolder: "sk-...",
   });
-
   if (apiKey === undefined) return;
 
-  let selectedModels: string[] = [];
+  const provId = Date.now().toString();
+  const newProvider: Provider = {
+    id: provId,
+    name: d.providerName,
+    baseUrl: baseUrl.trim(),
+    apiKey: apiKey?.trim() || "",
+  };
+
+  const fetchedModels: FetchedModelInfo[] = [];
   try {
-    const models = await fetchAvailableModels(baseUrl.trim(), apiKey?.trim() || "");
-    if (models.length > 0) {
-      const picks = await vscode.window.showQuickPick(
-        models.map((m) => ({ label: m, picked: true, alwaysShow: true })),
-        {
-          placeHolder: "勾选要启用的模型（取消勾选则不添加）",
-          title: "可用模型列表",
-          canPickMany: true,
-        }
-      );
-      if (!picks || picks.length === 0) return;
-      selectedModels = picks.map((p) => p.label);
-    } else {
-      const manualModel = await vscode.window.showInputBox({
-        prompt: "未获取到模型列表，请手动输入模型名称",
-        placeHolder: "gpt-4-turbo-preview",
-      });
-      if (!manualModel) return;
-      selectedModels = [manualModel.trim()];
+    const url = baseUrl.trim().replace(/\/$/, "") + "/models";
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
+    const resp = await fetch(url, { method: "GET", headers });
+    if (resp.ok) {
+      const data = await resp.json();
+      fetchedModels.push(...parseFetchedModels(data));
     }
   } catch (err) {
-    log(`fetchModels error: ${err}`);
-    const manualModel = await vscode.window.showInputBox({
-      prompt: `获取模型失败: ${err}，请手动输入模型名称`,
+    log(`quickAddModel fetchModels error: ${err}`);
+  }
+
+  let visibleModelIds: string[] = [];
+  if (fetchedModels.length > 0) {
+    const fetchedModelIds = fetchedModels.map((m) => m.id);
+    const picks = await vscode.window.showQuickPick(
+      fetchedModelIds.map((m) => ({ label: m, picked: true, alwaysShow: true })),
+      {
+        placeHolder: "勾选要启用的模型（取消勾选则不添加）",
+        title: "可用模型列表",
+        canPickMany: true,
+      }
+    );
+    if (!picks || picks.length === 0) return;
+    visibleModelIds = picks.map((p) => p.label);
+  } else {
+    const manual = await vscode.window.showInputBox({
+      prompt: "未获取到模型列表，请手动输入模型名称",
       placeHolder: "gpt-4-turbo-preview",
     });
-    if (!manualModel) return;
-    selectedModels = [manualModel.trim()];
+    if (!manual) return;
+    visibleModelIds = [manual.trim()];
   }
 
-  const config = vscode.workspace.getConfiguration("customai");
-  const existingModels: any[] = config.get<any[]>("models", []) || [];
+  await saveProvider(newProvider);
 
-  for (const modelName of selectedModels) {
-    const displayName = `${selected.label.replace(/^\$\(star-full\)\s*/, "").replace(/^\$\(gear\)\s*/, "")} - ${modelName}`;
-    existingModels.push({
+  const existingModels = getModels();
+  const existingModelNames = new Set(
+    existingModels
+      .filter((m) => m.providerId === provId)
+      .map((m) => m.modelName)
+  );
+
+  const fetchedModelMap = new Map(fetchedModels.map((m) => [m.id, m]));
+  const newModels: AIModel[] = [];
+  for (const mName of [...new Set([...visibleModelIds, ...fetchedModels.map((m) => m.id)])]) {
+    if (existingModelNames.has(mName)) continue;
+    const fetchedModel = fetchedModelMap.get(mName);
+    newModels.push({
       id: Date.now().toString() + Math.random().toString(36).slice(2, 6),
-      name: displayName,
-      provider: providerKey,
-      baseUrl: baseUrl.trim(),
-      apiKey: apiKey?.trim() || "",
-      modelName: modelName,
-      enabled: true,
+      providerId: provId,
+      modelName: mName,
+      displayName: `${d.providerName} - ${mName}`,
+      maxInputTokens: fetchedModel?.maxInputTokens || inferMaxInputTokens(mName, d.providerName),
+      reasoningProfile: "auto",
+      reasoningEffort: "default",
+      reasoningEffortOptions: fetchedModel?.reasoningEffortOptions || [],
+      thinkingType: "default",
+      thinkingTypeOptions: fetchedModel?.thinkingTypeOptions || [],
+      thinkingBudget: undefined,
+      customRequestParams: "",
+      visible: visibleModelIds.includes(mName),
     });
   }
 
-  const target = vscode.workspace.workspaceFolders
-    ? vscode.ConfigurationTarget.Workspace
-    : vscode.ConfigurationTarget.Global;
-  await config.update("models", existingModels, target);
+  if (newModels.length === 0) {
+    vscode.window.showInformationMessage(`供应商 "${d.providerName}" 已存在，没有新模型需要添加。`);
+  } else {
+    existingModels.push(...newModels);
+    await saveModels(existingModels);
+    vscode.window.showInformationMessage(
+      `已添加供应商 "${d.providerName}"，共 ${newModels.filter((m) => m.visible).length} 个模型可见！`
+    );
+  }
 
   provider?.refreshModelPicker();
-
-  vscode.window.showInformationMessage(`已添加 ${selectedModels.length} 个模型！请在 Copilot Chat 中选择使用。`);
 }
 
-async function fetchAvailableModels(baseUrl: string, apiKey: string): Promise<string[]> {
+// ══════════════════════════════════════════════════════
+//  Config Panel Webview
+// ══════════════════════════════════════════════════════
+
+async function fetchAvailableModels(baseUrl: string, apiKey: string): Promise<FetchedModelInfo[]> {
   const url = baseUrl.replace(/\/$/, "") + "/models";
   const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (apiKey) {
-    headers["Authorization"] = `Bearer ${apiKey}`;
-  }
-
+  if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
   log(`Fetching models from: ${url}`);
   const response = await fetch(url, { method: "GET", headers });
+  if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+  return parseFetchedModels(await response.json());
+}
 
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+function parseFetchedModels(payload: unknown): FetchedModelInfo[] {
+  const rawModels = Array.isArray(payload)
+    ? payload
+    : Array.isArray((payload as { data?: unknown[] })?.data)
+      ? (payload as { data: unknown[] }).data
+      : Array.isArray((payload as { models?: unknown[] })?.models)
+        ? (payload as { models: unknown[] }).models
+        : [];
+
+  return rawModels
+    .map(parseFetchedModel)
+    .filter((model): model is FetchedModelInfo => !!model?.id);
+}
+
+function parseFetchedModel(raw: unknown): FetchedModelInfo | undefined {
+  if (typeof raw === "string") {
+    return { id: raw };
+  }
+  if (!raw || typeof raw !== "object") {
+    return undefined;
   }
 
-  const data = await response.json() as { data?: Array<{ id: string }> };
-  const models = (data.data || []).map((m) => m.id).filter((id) => !!id);
-  log(`Fetched ${models.length} models from API`);
-  return models;
+  const record = raw as Record<string, unknown>;
+  const id = readString(record, ["id", "name", "model"]);
+  if (!id) return undefined;
+
+  return {
+    id,
+    maxInputTokens: readTokenLimit(record, [
+      "maxInputTokens",
+      "max_input_tokens",
+      "input_token_limit",
+      "prompt_token_limit",
+      "context_length",
+      "context_window",
+      "contextWindow",
+      "max_context_length",
+      "max_context_tokens",
+      "maxContextTokens",
+      "n_ctx",
+    ]),
+    reasoningEffortOptions: readOptionList(record, [
+      "reasoningEffortOptions",
+      "reasoning_effort_options",
+      "reasoning_efforts",
+      "supported_reasoning_efforts",
+      "supported_reasoning_effort",
+    ], ["reasoning_effort", "reasoning.effort", "reasoning", "effort"]),
+    thinkingTypeOptions: readOptionList(record, [
+      "thinkingTypeOptions",
+      "thinking_type_options",
+      "thinking_types",
+      "supported_thinking_types",
+    ], ["thinking.type", "thinking", "type"]),
+  };
+}
+
+function readString(record: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return undefined;
+}
+
+function readTokenLimit(record: Record<string, unknown>, keys: string[]): number | undefined {
+  for (const key of keys) {
+    const value = readNumber(record[key]);
+    if (value) return value;
+  }
+
+  for (const nestedKey of ["limits", "capabilities", "metadata", "top_provider"]) {
+    const nested = record[nestedKey];
+    if (nested && typeof nested === "object") {
+      const value = readTokenLimit(nested as Record<string, unknown>, keys);
+      if (value) return value;
+    }
+  }
+
+  return undefined;
+}
+
+function readOptionList(record: Record<string, unknown>, directKeys: string[], parameterPaths: string[]): string[] | undefined {
+  for (const key of directKeys) {
+    const direct = readStringArray(record[key]);
+    if (direct.length > 0) return direct;
+  }
+
+  const fromParams = readOptionsFromParameterSchemas(record, parameterPaths);
+  if (fromParams.length > 0) return fromParams;
+
+  for (const nestedKey of ["limits", "capabilities", "metadata", "parameters", "supported_parameters"]) {
+    const nested = record[nestedKey];
+    if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+      const nestedOptions = readOptionList(nested as Record<string, unknown>, directKeys, parameterPaths);
+      if (nestedOptions?.length) return nestedOptions;
+    }
+  }
+
+  return undefined;
+}
+
+function readOptionsFromParameterSchemas(record: Record<string, unknown>, parameterPaths: string[]): string[] {
+  for (const path of parameterPaths) {
+    const schema = readPath(record, path);
+    const direct = readStringArray(schema);
+    if (direct.length > 0) return direct;
+    if (schema && typeof schema === "object") {
+      const schemaRecord = schema as Record<string, unknown>;
+      for (const key of ["enum", "values", "options", "allowed", "supported_values", "choices"]) {
+        const values = readStringArray(schemaRecord[key]);
+        if (values.length > 0) return values;
+      }
+    }
+  }
+  return [];
+}
+
+function readPath(record: Record<string, unknown>, path: string): unknown {
+  let current: unknown = record;
+  for (const part of path.split(".")) {
+    if (!current || typeof current !== "object") return undefined;
+    current = (current as Record<string, unknown>)[part];
+  }
+  return current;
+}
+
+function readStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => typeof item === "string" ? item.trim() : "")
+      .filter((item) => !!item);
+  }
+  if (typeof value === "string") {
+    return value
+      .split(/[,\s|/]+/)
+      .map((item) => item.trim())
+      .filter((item) => !!item);
+  }
+  return [];
+}
+
+function readNumber(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return Math.floor(value);
+  }
+  if (typeof value === "string") {
+    const parsed = Number(value.replace(/,/g, "").trim());
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return Math.floor(parsed);
+    }
+  }
+  return undefined;
 }
 
 function showConfigPanel(context: vscode.ExtensionContext): void {
+  log("showConfigPanel: open requested");
   if (configPanel) {
     configPanel.reveal(vscode.ViewColumn.One);
+    sendConfig();
     return;
   }
 
@@ -239,546 +428,77 @@ function showConfigPanel(context: vscode.ExtensionContext): void {
     "customai.config",
     "Custom AI 配置",
     vscode.ViewColumn.One,
-    {
-      retainContextWhenHidden: true,
-      enableScripts: true,
-    }
+    { retainContextWhenHidden: true, enableScripts: true }
   );
 
-  configPanel.webview.html = getConfigHtml();
-
   configPanel.webview.onDidReceiveMessage(async (message) => {
+    log(`showConfigPanel: received message ${message?.type || "unknown"}`);
     switch (message.type) {
-      case "getModels":
-        const models = getModels();
-        configPanel?.webview.postMessage({ type: "models", models });
+      case "getConfig":
+        sendConfig();
         break;
-      case "saveModel":
-        await saveModel(message.model);
+      case "saveProvider": {
+        const prov: Provider = message.provider;
+        if (!prov.name || !prov.baseUrl) return;
+        await saveProvider(prov);
         provider?.refreshModelPicker();
+        sendConfig();
         break;
-      case "fetchModels":
+      }
+      case "deleteProvider": {
+        await deleteProvider(message.id);
+        provider?.refreshModelPicker();
+        sendConfig();
+        break;
+      }
+      case "fetchModels": {
         try {
-          const fetchedModels = await fetchAvailableModels(
-            message.baseUrl,
-            message.apiKey || ""
-          );
-          configPanel?.webview.postMessage({
-            type: "modelsFetched",
-            models: fetchedModels,
-          });
+          const fetched = await fetchAvailableModels(message.baseUrl, message.apiKey || "");
+          configPanel?.webview.postMessage({ type: "modelsFetched", models: fetched, providerId: message.providerId });
         } catch (err: any) {
-          configPanel?.webview.postMessage({
-            type: "modelsFetchError",
-            error: err.message,
-          });
+          configPanel?.webview.postMessage({ type: "modelsFetchError", error: err.message, providerId: message.providerId });
         }
         break;
-      case "openSettings":
-        vscode.commands.executeCommand("workbench.action.openSettings", "customai.models");
+      }
+      case "saveModels": {
+        const { providerId, models: providerModels } = message as { providerId: string; models: AIModel[] };
+        const allModels = getModels();
+        const otherModels = allModels.filter((m: AIModel) => m.providerId !== providerId);
+        const merged = otherModels.concat(providerModels);
+        await saveModels(merged);
+        provider?.refreshModelPicker();
+        sendConfig();
         break;
+      }
     }
   });
 
-  configPanel.onDidDispose(() => {
-    configPanel = undefined;
-  });
+  configPanel.webview.html = getWebviewContent();
+
+  let retries = 0;
+  const retrySend = setInterval(() => {
+    sendConfig();
+    retries++;
+    if (retries >= 5) clearInterval(retrySend);
+  }, 150);
+
+  configPanel.onDidDispose(() => { configPanel = undefined; });
 }
 
-function getModels(): any[] {
-  const config = vscode.workspace.getConfiguration("customai");
-  return config.get<any[]>("models", []);
-}
-
-async function saveModel(model: any): Promise<void> {
-  const config = vscode.workspace.getConfiguration("customai");
-  const models = getModels();
-
-  if (model.id) {
-    const index = models.findIndex((m: any) => m.id === model.id);
-    if (index !== -1) {
-      models[index] = model;
-    }
+function sendConfig(): void {
+  const p = getProviders();
+  const m = getModels();
+  log(`sendConfig: providers=${p.length}, models=${m.length}`);
+  if (configPanel) {
+    configPanel.webview.postMessage({ type: "config", providers: p, models: m });
   } else {
-    model.id = Date.now().toString();
-    model.enabled = true;
-    models.push(model);
+    log("sendConfig: configPanel is null!");
   }
-
-  const target = vscode.workspace.workspaceFolders
-    ? vscode.ConfigurationTarget.Workspace
-    : vscode.ConfigurationTarget.Global;
-  await config.update("models", models, target);
-  configPanel?.webview.postMessage({ type: "models", models });
 }
 
-function getConfigHtml(): string {
-  return `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      padding: 20px;
-      background: var(--vscode-editor-background);
-      color: var(--vscode-editor-foreground);
-    }
-    .header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 20px;
-      padding-bottom: 15px;
-      border-bottom: 1px solid var(--vscode-widget-border);
-    }
-    h2 { font-size: 16px; }
-    .btn {
-      padding: 6px 12px;
-      border: none;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 12px;
-    }
-    .btn-primary {
-      background: var(--vscode-button-background);
-      color: var(--vscode-button-foreground);
-    }
-    .btn-danger { background: #f14c4c; color: white; }
-    .model-card {
-      background: var(--vscode-textCodeBlock-background);
-      border: 1px solid var(--vscode-widget-border);
-      border-radius: 6px;
-      padding: 12px;
-      margin-bottom: 10px;
-    }
-    .model-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 8px;
-    }
-    .model-name { font-weight: 600; font-size: 14px; }
-    .model-provider { font-size: 12px; color: var(--vscode-descriptionForeground); margin-top: 4px; }
-    .model-info { font-size: 11px; color: var(--vscode-descriptionForeground); margin-top: 6px; word-break: break-all; }
-    .model-actions { display: flex; gap: 8px; margin-top: 10px; }
-    .btn-sm { padding: 4px 8px; font-size: 11px; }
-    .empty { text-align: center; padding: 40px; color: var(--vscode-descriptionForeground); }
-    .quick-add {
-      display: flex;
-      gap: 8px;
-      margin-bottom: 15px;
-      flex-wrap: wrap;
-    }
-    .provider-btn {
-      padding: 6px 12px;
-      font-size: 11px;
-      background: var(--vscode-textCodeBlock-background);
-      border: 1px solid var(--vscode-widget-border);
-      border-radius: 4px;
-      color: var(--vscode-editor-foreground);
-      cursor: pointer;
-    }
-    .provider-btn:hover { border-color: var(--vscode-focusBorder); }
-    .modal {
-      display: none;
-      position: fixed;
-      top: 0; left: 0; right: 0; bottom: 0;
-      background: rgba(0,0,0,0.5);
-      justify-content: center;
-      align-items: center;
-    }
-    .modal.show { display: flex; }
-    .modal-content {
-      background: var(--vscode-editor-background);
-      border: 1px solid var(--vscode-widget-border);
-      border-radius: 8px;
-      width: 500px;
-      max-height: 85vh;
-      overflow-y: auto;
-    }
-    .modal-header {
-      padding: 15px;
-      border-bottom: 1px solid var(--vscode-widget-border);
-      font-weight: 600;
-    }
-    .modal-body { padding: 15px; }
-    .form-group { margin-bottom: 12px; }
-    .form-group label {
-      display: block;
-      font-size: 12px;
-      margin-bottom: 4px;
-      color: var(--vscode-descriptionForeground);
-    }
-    .form-group input, .form-group select {
-      width: 100%;
-      padding: 8px;
-      background: var(--vscode-input-background);
-      border: 1px solid var(--vscode-input-border);
-      border-radius: 4px;
-      color: var(--vscode-input-foreground);
-    }
-    .form-group input:disabled, .form-group select:disabled {
-      opacity: 0.6;
-      cursor: not-allowed;
-    }
-    .modal-footer {
-      padding: 12px 15px;
-      border-top: 1px solid var(--vscode-widget-border);
-      display: flex;
-      justify-content: flex-end;
-      gap: 8px;
-    }
-    #fetchBtn {
-      margin-top: 4px;
-    }
-    #modelCheckboxContainer {
-      max-height: 200px;
-      overflow-y: auto;
-      border: 1px solid var(--vscode-input-border);
-      border-radius: 4px;
-      padding: 8px;
-      background: var(--vscode-input-background);
-      display: none;
-    }
-    #modelCheckboxContainer label {
-      display: flex;
-      align-items: center;
-      padding: 3px 0;
-      cursor: pointer;
-      font-size: 12px;
-      color: var(--vscode-input-foreground);
-    }
-    #modelCheckboxContainer input[type="checkbox"] {
-      margin-right: 8px;
-      width: auto;
-    }
-  </style>
-</head>
-<body>
-  <div class="header">
-    <h2>Custom AI 模型配置</h2>
-    <div style="display: flex; gap: 8px;">
-      <button class="btn btn-primary" onclick="showAddModal()">+ 添加模型</button>
-      <button class="btn btn-primary" onclick="openSettings()">编辑 JSON</button>
-    </div>
-  </div>
-
-  <div class="quick-add">
-    <button class="provider-btn" onclick="quickAdd('step')">阶跃星辰</button>
-    <button class="provider-btn" onclick="quickAdd('zhipu')">智谱 AI</button>
-    <button class="provider-btn" onclick="quickAdd('moonshot')">月之暗面</button>
-    <button class="provider-btn" onclick="quickAdd('deepseek')">DeepSeek</button>
-    <button class="provider-btn" onclick="quickAdd('baichuan')">百川</button>
-    <button class="provider-btn" onclick="quickAdd('yi')">零一万物</button>
-    <button class="provider-btn" onclick="quickAdd('openai')">OpenAI</button>
-    <button class="provider-btn" onclick="quickAdd('anthropic')">Anthropic</button>
-    <button class="provider-btn" onclick="quickAdd('ollama')">Ollama</button>
-    <button class="provider-btn" onclick="quickAdd('custom')">自定义</button>
-  </div>
-
-  <div id="modelsList"></div>
-
-  <div class="modal" id="modal">
-    <div class="modal-content">
-      <div class="modal-header" id="modalTitle">添加模型</div>
-      <div class="modal-body">
-        <div class="form-group">
-          <label>显示名称</label>
-          <input type="text" id="modelName" placeholder="我的 GPT-4">
-        </div>
-        <div class="form-group">
-          <label>提供商</label>
-          <select id="modelProvider" onchange="onProviderChange()">
-            <option value="step">阶跃星辰 (Step)</option>
-            <option value="zhipu">智谱 AI (GLM)</option>
-            <option value="moonshot">月之暗面 (Moonshot)</option>
-            <option value="deepseek">DeepSeek</option>
-            <option value="baichuan">百川 (Baichuan)</option>
-            <option value="yi">零一万物 (Yi)</option>
-            <option value="openai">OpenAI</option>
-            <option value="anthropic">Anthropic (Claude)</option>
-            <option value="ollama">Ollama</option>
-            <option value="custom">自定义</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label>Base URL</label>
-          <input type="text" id="baseUrl" placeholder="https://api.openai.com/v1">
-        </div>
-        <div class="form-group">
-          <label>API Key</label>
-          <input type="password" id="apiKey" placeholder="sk-...">
-        </div>
-        <div class="form-group" id="fetchBtnGroup">
-          <button class="btn btn-primary" onclick="fetchModels()" id="fetchBtn" style="width:100%">获取可用模型列表</button>
-        </div>
-        <div class="form-group" id="modelCheckboxGroup" style="display:none">
-          <label>勾选要启用的模型</label>
-          <div id="modelCheckboxContainer"></div>
-        </div>
-        <div class="form-group">
-          <label>模型名称</label>
-          <input type="text" id="modelName2" placeholder="手动输入模型名称，或从上方列表勾选">
-        </div>
-      </div>
-      <div class="modal-footer">
-        <button class="btn btn-primary" onclick="hideModal()">取消</button>
-        <button class="btn btn-primary" onclick="saveModels()" id="saveBtn">添加</button>
-      </div>
-    </div>
-  </div>
-
-  <script>
-    const vscode = acquireVsCodeApi();
-    let models = [];
-    let editingId = null;
-    let fetchedModelList = [];
-
-    const defaults = {
-      step: { baseUrl: 'https://api.stepfun.com/v1' },
-      zhipu: { baseUrl: 'https://open.bigmodel.cn/api/paas/v4' },
-      moonshot: { baseUrl: 'https://api.moonshot.cn/v1' },
-      deepseek: { baseUrl: 'https://api.deepseek.com/v1' },
-      baichuan: { baseUrl: 'https://api.baichuan-ai.com/v1' },
-      yi: { baseUrl: 'https://api.lingyiwanwu.com/v1' },
-      openai: { baseUrl: 'https://api.openai.com/v1' },
-      anthropic: { baseUrl: 'https://api.anthropic.com/v1' },
-      ollama: { baseUrl: 'http://localhost:11434/v1' },
-      custom: { baseUrl: '' }
-    };
-
-    vscode.postMessage({ type: 'getModels' });
-
-    window.addEventListener('message', event => {
-      const message = event.data;
-      if (message.type === 'models') {
-        models = message.models || [];
-        renderModels();
-      }
-      if (message.type === 'modelsFetched') {
-        fetchedModelList = message.models || [];
-        renderModelCheckboxes();
-        document.getElementById('fetchBtn').textContent = '\u2705 获取成功！请勾选模型';
-        document.getElementById('fetchBtn').disabled = false;
-      }
-      if (message.type === 'modelsFetchError') {
-        alert('获取模型失败: ' + message.error);
-        document.getElementById('fetchBtn').textContent = '获取可用模型列表';
-        document.getElementById('fetchBtn').disabled = false;
-      }
-    });
-
-    function renderModels() {
-      const list = document.getElementById('modelsList');
-      if (models.length === 0) {
-        list.innerHTML = '<div class="empty">暂无配置模型<br><br><button class="btn btn-primary" onclick="showAddModal()">+ 添加第一个模型</button></div>';
-        return;
-      }
-      list.innerHTML = models.map(m => \`
-        <div class="model-card">
-          <div class="model-header">
-            <div>
-              <div class="model-name">\${m.name}</div>
-              <div class="model-provider">\${m.provider} / \${m.modelName}</div>
-            </div>
-          </div>
-          <div class="model-info">URL: \${m.baseUrl}</div>
-          <div class="model-actions">
-            <button class="btn btn-primary btn-sm" onclick="editModel('\${btoa(m.id)}')">编辑</button>
-          </div>
-        </div>
-      \`).join('');
-    }
-
-    function showAddModal() {
-      editingId = null;
-      fetchedModelList = [];
-      document.getElementById('modalTitle').textContent = '添加模型';
-      document.getElementById('saveBtn').textContent = '添加';
-      document.getElementById('modelName').value = '';
-      document.getElementById('modelProvider').value = 'step';
-      document.getElementById('modelProvider').disabled = false;
-      document.getElementById('baseUrl').value = '';
-      document.getElementById('apiKey').value = '';
-      document.getElementById('modelName2').value = '';
-      document.getElementById('modelName2').disabled = false;
-      document.getElementById('fetchBtnGroup').style.display = '';
-      document.getElementById('fetchBtn').textContent = '获取可用模型列表';
-      document.getElementById('fetchBtn').disabled = false;
-      document.getElementById('modelCheckboxGroup').style.display = 'none';
-      document.getElementById('modelCheckboxContainer').innerHTML = '';
-      document.getElementById('modelCheckboxContainer').style.display = 'none';
-      document.getElementById('modal').classList.add('show');
-    }
-
-    function editModel(id) {
-      const decodedId = atob(id);
-      const model = models.find(m => m.id === decodedId);
-      if (!model) return;
-      editingId = decodedId;
-      fetchedModelList = [];
-      document.getElementById('modalTitle').textContent = '编辑模型';
-      document.getElementById('saveBtn').textContent = '保存';
-      document.getElementById('modelName').value = model.name;
-      document.getElementById('modelProvider').value = model.provider;
-      document.getElementById('modelProvider').disabled = true;
-      document.getElementById('baseUrl').value = model.baseUrl;
-      document.getElementById('apiKey').value = model.apiKey || '';
-      document.getElementById('modelName2').value = model.modelName;
-      document.getElementById('modelName2').disabled = true;
-      document.getElementById('fetchBtnGroup').style.display = 'none';
-      document.getElementById('modelCheckboxGroup').style.display = 'none';
-      document.getElementById('modelCheckboxContainer').innerHTML = '';
-      document.getElementById('modelCheckboxContainer').style.display = 'none';
-      document.getElementById('modal').classList.add('show');
-    }
-
-    function hideModal() {
-      document.getElementById('modal').classList.remove('show');
-      document.getElementById('modelProvider').disabled = false;
-      document.getElementById('modelName2').disabled = false;
-    }
-
-    function onProviderChange() {
-      const provider = document.getElementById('modelProvider').value;
-      const d = defaults[provider];
-      if (d && !document.getElementById('baseUrl').value) {
-        document.getElementById('baseUrl').value = d.baseUrl;
-      }
-      fetchedModelList = [];
-      document.getElementById('modelCheckboxContainer').innerHTML = '';
-      document.getElementById('modelCheckboxContainer').style.display = 'none';
-      document.getElementById('modelCheckboxGroup').style.display = 'none';
-      document.getElementById('fetchBtn').textContent = '获取可用模型列表';
-    }
-
-    function fetchModels() {
-      const baseUrl = document.getElementById('baseUrl').value.trim();
-      const apiKey = document.getElementById('apiKey').value.trim();
-      const btn = document.getElementById('fetchBtn');
-
-      if (!baseUrl) {
-        alert('请先填写 Base URL');
-        return;
-      }
-
-      btn.textContent = '获取中...';
-      btn.disabled = true;
-
-      vscode.postMessage({
-        type: 'fetchModels',
-        baseUrl: baseUrl,
-        apiKey: apiKey
-      });
-    }
-
-    function renderModelCheckboxes() {
-      const container = document.getElementById('modelCheckboxContainer');
-      const group = document.getElementById('modelCheckboxGroup');
-
-      if (fetchedModelList.length === 0) {
-        group.style.display = 'none';
-        container.style.display = 'none';
-        return;
-      }
-
-      container.innerHTML = fetchedModelList.map((modelId, i) => \`
-        <label>
-          <input type="checkbox" value="\${modelId}" id="mc_\${i}" checked onchange="onModelCheckboxChange()">
-          \${modelId}
-        </label>
-      \`).join('');
-
-      container.style.display = 'block';
-      group.style.display = '';
-      onModelCheckboxChange();
-    }
-
-    function onModelCheckboxChange() {
-      const checked = document.querySelectorAll('#modelCheckboxContainer input[type="checkbox"]:checked');
-      const selected = Array.from(checked).map(cb => cb.value);
-      document.getElementById('modelName2').value = selected.join(', ');
-    }
-
-    function quickAdd(provider) {
-      const d = defaults[provider];
-      fetchedModelList = [];
-      document.getElementById('modelProvider').value = provider;
-      document.getElementById('modelProvider').disabled = false;
-      document.getElementById('baseUrl').value = d.baseUrl;
-      document.getElementById('modelName2').value = '';
-      document.getElementById('modelName2').disabled = false;
-      document.getElementById('modelName').value = '';
-      document.getElementById('apiKey').value = '';
-      document.getElementById('fetchBtnGroup').style.display = '';
-      document.getElementById('fetchBtn').textContent = '获取可用模型列表';
-      document.getElementById('fetchBtn').disabled = false;
-      document.getElementById('modelCheckboxGroup').style.display = 'none';
-      document.getElementById('modelCheckboxContainer').innerHTML = '';
-      document.getElementById('modelCheckboxContainer').style.display = 'none';
-      document.getElementById('modal').classList.add('show');
-    }
-
-    function saveModels() {
-      const name = document.getElementById('modelName').value.trim();
-      const provider = document.getElementById('modelProvider').value;
-      const baseUrl = document.getElementById('baseUrl').value.trim();
-      const apiKey = document.getElementById('apiKey').value;
-
-      if (!baseUrl) {
-        alert('请填写 Base URL');
-        return;
-      }
-
-      if (editingId) {
-        const modelName = document.getElementById('modelName2').value.trim();
-        if (!modelName) {
-          alert('请输入模型名称');
-          return;
-        }
-        const displayName = name || (provider.charAt(0).toUpperCase() + provider.slice(1) + ' - ' + modelName);
-        vscode.postMessage({
-          type: 'saveModel',
-          model: { id: editingId, name: displayName, provider, baseUrl, apiKey, modelName: modelName }
-        });
-      } else {
-        const checkboxes = document.querySelectorAll('#modelCheckboxContainer input[type="checkbox"]:checked');
-        let selectedModels = Array.from(checkboxes).map(cb => cb.value);
-
-        if (selectedModels.length === 0) {
-          const manual = document.getElementById('modelName2').value.trim();
-          if (!manual) {
-            alert('请勾选模型或手动输入模型名称');
-            return;
-          }
-          selectedModels = [manual];
-        }
-
-        selectedModels.forEach(mName => {
-          const displayName = name
-            ? (selectedModels.length > 1 ? name + ' - ' + mName : name)
-            : (provider.charAt(0).toUpperCase() + provider.slice(1) + ' - ' + mName);
-          vscode.postMessage({
-            type: 'saveModel',
-            model: { id: null, name: displayName, provider, baseUrl, apiKey, modelName: mName }
-          });
-        });
-      }
-
-      hideModal();
-    }
-
-    function openSettings() {
-      vscode.postMessage({ type: 'openSettings' });
-    }
-  </script>
-</body>
-</html>`;
-}
-
+// ══════════════════════════════════════════════════════
 export function deactivate(): void {
   provider?.prepareForDeactivate();
   configPanel?.dispose();
 }
+

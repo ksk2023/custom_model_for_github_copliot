@@ -1,0 +1,13 @@
+.git/**
+.github/**
+.vscode/**
+.vscode-test/**
+src/**
+node_modules/**
+deepseek-extracted/**
+*.vsix
+*.log
+tsconfig.json
+package-lock.json
+dist/**/*.map
+dist/**/*.d.ts.map

@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
-import { AIModel, getModels } from "./config.js";
+import { AIModel, Provider, getVisibleModels, getProviders, getModels } from "./config.js";
 import { log } from "./logger.js";
+import { getReasoningEffortOptions, getThinkingTypeOptions, resolveModelRuntimeMetadata } from "./modelMetadata.js";
 
 export class CustomAIProvider {
   private context: vscode.ExtensionContext;
@@ -15,7 +16,7 @@ export class CustomAIProvider {
     context.subscriptions.push(
       this.onDidChangeLanguageModelChatInformationEmitter,
       vscode.workspace.onDidChangeConfiguration((e) => {
-        if (e.affectsConfiguration("customai.models")) {
+        if (e.affectsConfiguration("customai.models") || e.affectsConfiguration("customai.providers")) {
           log("Configuration changed, firing refresh");
           this.onDidChangeLanguageModelChatInformationEmitter.fire();
         }
@@ -42,34 +43,57 @@ export class CustomAIProvider {
       return [];
     }
 
-    const models = getModels();
-    log(`getModels returned ${models.length} models`);
-    for (const m of models) {
-      log(`  Model: id=${m.id}, name=${m.name}, provider=${m.provider}, hasApiKey=${!!m.apiKey}`);
+    const models = getVisibleModels();
+    const allModels = getModels();
+    const providers = getProviders();
+    const providerMap = new Map<string, Provider>();
+    for (const p of providers) {
+      providerMap.set(p.id, p);
     }
-    const result = models.map((model) => this.toChatInfo(model));
+
+    log(`=== Model Picker Debug ===`);
+    log(`Total models in config: ${allModels.length}`);
+    log(`Visible models: ${models.length}`);
+    log(`Total providers: ${providers.length}`);
+    for (const m of allModels) {
+      const prov = providerMap.get(m.providerId);
+      log(`  [${m.visible ? 'VISIBLE' : 'hidden'}] id=${m.id} displayName=${m.displayName} modelName=${m.modelName} providerId=${m.providerId} (${prov?.name || 'NOT FOUND'})`);
+    }
+    log(`=== End Debug ===`);
+
+    const result: vscode.LanguageModelChatInformation[] = [];
+    for (const m of models) {
+      const provider = providerMap.get(m.providerId);
+      if (provider) {
+        result.push(this.toChatInfo(m, provider));
+      } else {
+        log(`  WARN: Visible model ${m.id} has no matching provider ${m.providerId} — skipping`);
+      }
+    }
     log(`Returning ${result.length} LanguageModelChatInformation items`);
     return result;
   }
 
-  private toChatInfo(model: AIModel): vscode.LanguageModelChatInformation {
-    const hasApiKey = !!model.apiKey && model.apiKey.length > 0;
+  private toChatInfo(model: AIModel, provider: Provider): vscode.LanguageModelChatInformation {
+    const hasApiKey = !!provider.apiKey && provider.apiKey.length > 0;
+    const safeId = model.id.replace(/[^a-zA-Z0-9_-]/g, "_");
+    const metadata = resolveModelRuntimeMetadata(model.modelName, provider.name, model.maxInputTokens);
 
     return {
-      id: model.id,
-      name: model.name,
-      family: model.provider,
+      id: `customai:${safeId}`,
+      name: model.displayName,
+      family: provider.name,
       version: model.modelName,
-      maxInputTokens: 128000,
-      maxOutputTokens: 8192,
+      maxInputTokens: metadata.maxInputTokens,
+      maxOutputTokens: metadata.maxOutputTokens,
       isUserSelectable: true,
       capabilities: {
-        imageInput: false,
-        toolCalling: true,
+        imageInput: metadata.imageInput,
+        toolCalling: metadata.toolCalling,
       },
       detail: hasApiKey
-        ? `${model.provider} - ${model.baseUrl}`
-        : `${model.provider} - API Key 未设置`,
+        ? `${provider.name} - ${provider.baseUrl}`
+        : `${provider.name} - API Key 未设置`,
       tooltip: hasApiKey ? undefined : "请先配置 API Key",
     } as vscode.LanguageModelChatInformation;
   }
@@ -81,14 +105,22 @@ export class CustomAIProvider {
     progress: vscode.Progress<vscode.LanguageModelResponsePart>,
     token: vscode.CancellationToken
   ): Promise<void> {
+    const modelId = modelInfo.id.startsWith("customai:") ? modelInfo.id.slice("customai:".length) : modelInfo.id;
     const models = getModels();
-    const model = models.find((m) => m.id === modelInfo.id);
+    const model = models.find((m) => m.id === modelId);
 
     if (!model) {
-      throw new Error(`Model not found: ${modelInfo.id}`);
+      throw new Error(`Model not found: ${modelId} (modelInfo.id: ${modelInfo.id})`);
     }
 
-    log(`provideLanguageModelChatResponse called for model: ${model.name}`);
+    const providers = getProviders();
+    const provider = providers.find((p) => p.id === model.providerId);
+
+    if (!provider) {
+      throw new Error(`Provider not found for model: ${modelId}`);
+    }
+
+    log(`provideLanguageModelChatResponse called for model: ${model.displayName} (provider: ${provider.name})`);
 
     const apiMessages = this.convertMessages(messages);
 
@@ -102,8 +134,8 @@ export class CustomAIProvider {
       stream: true,
       temperature,
     };
-
-    const isAnthropic = model.provider === "anthropic";
+    const isAnthropic = provider.name.toLowerCase().includes("anthropic") || provider.name.toLowerCase().includes("claude");
+    this.applyReasoningOptions(body, model, provider, isAnthropic);
 
     if (!isAnthropic && options.tools && options.tools.length > 0) {
       body.tools = options.tools.map((tool) => ({
@@ -117,15 +149,15 @@ export class CustomAIProvider {
       body.tool_choice = "auto";
     }
 
-    let endpoint = model.baseUrl.replace(/\/$/, "");
+    let endpoint = provider.baseUrl.replace(/\/$/, "");
 
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
     };
 
-    if (model.apiKey) {
+    if (provider.apiKey) {
       if (isAnthropic) {
-        headers["x-api-key"] = model.apiKey;
+        headers["x-api-key"] = provider.apiKey;
         headers["anthropic-version"] = "2023-06-01";
         endpoint += "/messages";
         delete body.model;
@@ -133,7 +165,7 @@ export class CustomAIProvider {
         (body as Record<string, unknown>).model = model.modelName;
         (body as Record<string, unknown>).max_tokens = maxTokens;
       } else {
-        headers["Authorization"] = `Bearer ${model.apiKey}`;
+        headers["Authorization"] = `Bearer ${provider.apiKey}`;
         endpoint += "/chat/completions";
         (body as Record<string, unknown>).max_tokens = maxTokens;
       }
@@ -298,6 +330,149 @@ export class CustomAIProvider {
     }
 
     return result;
+  }
+
+  private applyReasoningOptions(
+    body: Record<string, unknown>,
+    model: AIModel,
+    provider: Provider,
+    isAnthropic: boolean
+  ): void {
+    const profile = this.resolveReasoningProfile(model, provider);
+    const reasoningOptions = model.reasoningEffortOptions?.length
+      ? model.reasoningEffortOptions
+      : getReasoningEffortOptions(model.modelName, provider.name);
+    const thinkingOptions = model.thinkingTypeOptions?.length
+      ? model.thinkingTypeOptions
+      : getThinkingTypeOptions(model.modelName, provider.name);
+    const effort = model.reasoningEffort && model.reasoningEffort !== "default" ? model.reasoningEffort : undefined;
+    const thinking = model.thinkingType && model.thinkingType !== "default" ? model.thinkingType : undefined;
+    const budget = Number.isFinite(model.thinkingBudget) && model.thinkingBudget && model.thinkingBudget > 0
+      ? Math.floor(model.thinkingBudget)
+      : undefined;
+
+    if (profile === "off") {
+      this.mergeCustomRequestParams(body, model);
+      return;
+    }
+
+    if ((profile === "openai" || profile === "stepfun") && effort && this.isAllowedOption(effort, reasoningOptions)) {
+      body.reasoning_effort = effort;
+    }
+
+    if (profile === "deepseek") {
+      if (thinking && this.isAllowedOption(thinking, thinkingOptions)) {
+        body.thinking = { type: thinking };
+      }
+      if (effort && this.isAllowedOption(effort, reasoningOptions)) {
+        body.reasoning_effort = effort;
+      }
+    }
+
+    if (profile === "glm") {
+      if (thinking && this.isAllowedOption(thinking, thinkingOptions)) {
+        body.thinking = { type: thinking };
+      }
+    }
+
+    if (profile === "qwen") {
+      if (thinking === "enabled") body.enable_thinking = true;
+      if (thinking === "disabled") body.enable_thinking = false;
+      if (budget) body.thinking_budget = budget;
+    }
+
+    if (profile === "claude") {
+      if (thinking === "adaptive") {
+        body.thinking = { type: "adaptive" };
+      } else if (thinking === "enabled") {
+        body.thinking = budget ? { type: "enabled", budget_tokens: budget } : { type: "enabled" };
+      } else if (thinking === "disabled") {
+        body.thinking = { type: "disabled" };
+      }
+      if (effort && this.isAllowedOption(effort, reasoningOptions)) {
+        body.output_config = { ...(body.output_config as Record<string, unknown> || {}), effort };
+      }
+      if (!isAnthropic && body.thinking) {
+        body.thinking = body.thinking;
+      }
+    }
+
+    if (profile === "gemini") {
+      const thinkingConfig: Record<string, unknown> = {};
+      if (effort && this.isAllowedOption(effort, reasoningOptions)) {
+        thinkingConfig.thinkingLevel = effort;
+      }
+      if (budget || model.thinkingBudget === 0) {
+        thinkingConfig.thinkingBudget = Math.floor(model.thinkingBudget || 0);
+      }
+      if (Object.keys(thinkingConfig).length > 0) {
+        body.generationConfig = {
+          ...(body.generationConfig as Record<string, unknown> || {}),
+          thinkingConfig,
+        };
+      }
+    }
+
+    if (profile === "custom") {
+      if (effort) body.reasoning_effort = effort;
+      if (thinking) body.thinking = { type: thinking };
+      if (budget) body.thinking_budget = budget;
+    }
+
+    if (profile === "minimax" && thinking === "enabled") {
+      body.reasoning_split = true;
+    }
+
+    this.mergeCustomRequestParams(body, model);
+  }
+
+  private resolveReasoningProfile(model: AIModel, provider: Provider): string {
+    const explicit = (model.reasoningProfile || "auto").toLowerCase();
+    if (explicit !== "auto") return explicit;
+
+    const value = `${provider.name} ${provider.baseUrl} ${model.modelName}`.toLowerCase();
+    if (value.includes("deepseek")) return "deepseek";
+    if (value.includes("dashscope") || value.includes("qwen") || value.includes("aliyun") || value.includes("alibaba")) return "qwen";
+    if (value.includes("bigmodel") || value.includes("zhipu") || value.includes("智谱") || value.includes("glm")) return "glm";
+    if (value.includes("stepfun") || value.includes("阶跃") || value.includes("step-")) return "stepfun";
+    if (value.includes("anthropic") || value.includes("claude")) return "claude";
+    if (value.includes("gemini") || value.includes("googleapis") || value.includes("google")) return "gemini";
+    if (value.includes("minimax") || value.includes("minimaxi")) return "minimax";
+    if (value.includes("openai") || value.includes("gpt-") || /^o\d/.test(model.modelName.toLowerCase())) return "openai";
+    return "custom";
+  }
+
+  private isAllowedOption(value: string, options: string[]): boolean {
+    return options.length === 0 || options.includes(value);
+  }
+
+  private mergeCustomRequestParams(body: Record<string, unknown>, model: AIModel): void {
+    if (!model.customRequestParams || !model.customRequestParams.trim()) return;
+    try {
+      const parsed = JSON.parse(model.customRequestParams) as Record<string, unknown>;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        this.deepMerge(body, parsed);
+      }
+    } catch (err) {
+      log(`Invalid customRequestParams for ${model.modelName}: ${(err as Error).message}`);
+    }
+  }
+
+  private deepMerge(target: Record<string, unknown>, source: Record<string, unknown>): void {
+    for (const [key, value] of Object.entries(source)) {
+      if (
+        value &&
+        typeof value === "object" &&
+        !Array.isArray(value) &&
+        target[key] &&
+        typeof target[key] === "object" &&
+        !Array.isArray(target[key])
+      ) {
+        this.deepMerge(target[key] as Record<string, unknown>, value as Record<string, unknown>);
+      } else {
+        target[key] = value;
+      }
+    }
   }
 
   async provideTokenCount(

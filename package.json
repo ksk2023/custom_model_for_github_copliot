@@ -67,7 +67,12 @@
         "customai.models": {
           "type": "array",
           "default": [],
-          "description": "Custom AI models configuration"
+          "description": "Custom AI models (each model belongs to a provider)"
+        },
+        "customai.providers": {
+          "type": "array",
+          "default": [],
+          "description": "Custom AI providers (API endpoints with baseUrl and apiKey)"
         },
         "customai.defaultTemperature": {
           "type": "number",
