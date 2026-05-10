@@ -1,3 +1,16 @@
+/**
+ * modelMetadata.ts — 模型运行时元数据解析
+ *
+ * 根据模型名称和供应商推断：
+ *   - maxInputTokens / maxOutputTokens（上下文窗口 + 最大输出）
+ *   - imageInput / toolCalling（能力标志）
+ *   - reasoningEffortOptions（推理强度选项，如 low/medium/high）
+ *   - thinkingTypeOptions（思维链类型选项，如 enabled/disabled/adaptive）
+ *
+ * 优先级：精确匹配 > 前缀匹配 > 供应商推断 > 默认值
+ * 用户配置的 maxInputTokens 会覆盖推断值
+ */
+
 export interface ModelRuntimeMetadata {
   maxInputTokens: number;
   maxOutputTokens: number;

@@ -1,3 +1,15 @@
+/**
+ * provider.ts — 模型注册与对话处理
+ *
+ * 通过 vscode.lm.registerLanguageModelChatProvider 将自定义 AI 模型
+ * 注册到 GitHub Copilot Chat 的模型选择器中。
+ *
+ * 核心职责：
+ *   1. provideLanguageModelChatInformation — 向 Copilot 报告可用模型
+ *   2. provideLanguageModelChatResponse — 处理用户对话请求（支持流式、工具调用、推理）
+ *   3. applyReasoningOptions — 根据模型元数据自动注入推理/思维链参数
+ */
+
 import * as vscode from "vscode";
 import { AIModel, Provider, getVisibleModels, getProviders, getModels } from "./config.js";
 import { log } from "./logger.js";
@@ -24,15 +36,21 @@ export class CustomAIProvider {
     );
   }
 
+  /** 通知 Copilot Chat 刷新模型选择器 */
   refreshModelPicker(): void {
     this.onDidChangeLanguageModelChatInformationEmitter.fire();
   }
 
+  /** 扩展停用时清理 */
   prepareForDeactivate(): void {
     this.isActive = false;
     this.onDidChangeLanguageModelChatInformationEmitter.fire();
   }
 
+  /**
+   * 向 Copilot Chat 报告可用模型列表
+   * 只返回 visible=true 的模型，每个模型关联其供应商信息
+   */
   async provideLanguageModelChatInformation(
     _options: vscode.PrepareLanguageModelChatModelOptions,
     _token: vscode.CancellationToken
@@ -74,9 +92,10 @@ export class CustomAIProvider {
     return result;
   }
 
+  /** 将模型 + 供应商组合转换为 Copilot Chat 所需的元数据格式 */
   private toChatInfo(model: AIModel, provider: Provider): vscode.LanguageModelChatInformation {
     const hasApiKey = !!provider.apiKey && provider.apiKey.length > 0;
-    const safeId = model.id.replace(/[^a-zA-Z0-9_-]/g, "_");
+    const safeId = model.id.replace(/[^a-zA-Z0-9_-]/g, "_");  // 确保 ID 不含非法字符
     const metadata = resolveModelRuntimeMetadata(model.modelName, provider.name, model.maxInputTokens);
 
     return {
@@ -98,6 +117,12 @@ export class CustomAIProvider {
     } as vscode.LanguageModelChatInformation;
   }
 
+  /**
+   * 处理 Copilot Chat 发送的对话请求
+   * - 根据 modelInfo.id 查找模型和供应商
+   * - 组装 API 请求（支持 OpenAI / Anthropic 双协议）
+   * - 流式解析响应（支持工具调用、推理内容）
+   */
   async provideLanguageModelChatResponse(
     modelInfo: vscode.LanguageModelChatInformation,
     messages: readonly vscode.LanguageModelChatRequestMessage[],
@@ -137,6 +162,7 @@ export class CustomAIProvider {
     const isAnthropic = provider.name.toLowerCase().includes("anthropic") || provider.name.toLowerCase().includes("claude");
     this.applyReasoningOptions(body, model, provider, isAnthropic);
 
+    // 工具调用：仅 OpenAI 兼容协议支持
     if (!isAnthropic && options.tools && options.tools.length > 0) {
       body.tools = options.tools.map((tool) => ({
         type: "function",
@@ -157,6 +183,7 @@ export class CustomAIProvider {
 
     if (provider.apiKey) {
       if (isAnthropic) {
+        // Anthropic 协议：x-api-key 头 + /messages 端点
         headers["x-api-key"] = provider.apiKey;
         headers["anthropic-version"] = "2023-06-01";
         endpoint += "/messages";
@@ -165,6 +192,7 @@ export class CustomAIProvider {
         (body as Record<string, unknown>).model = model.modelName;
         (body as Record<string, unknown>).max_tokens = maxTokens;
       } else {
+        // OpenAI 兼容协议：Bearer 头 + /chat/completions 端点
         headers["Authorization"] = `Bearer ${provider.apiKey}`;
         endpoint += "/chat/completions";
         (body as Record<string, unknown>).max_tokens = maxTokens;
@@ -216,11 +244,13 @@ export class CustomAIProvider {
             const parsed = JSON.parse(data);
 
             if (isAnthropic) {
+              // Anthropic 流式解析
               const text = parsed.delta?.text || parsed.content?.[0]?.text || "";
               if (text) {
                 progress.report(new vscode.LanguageModelTextPart(text));
               }
             } else {
+              // OpenAI 兼容流式解析
               const delta = parsed.choices?.[0]?.delta;
               const finishReason = parsed.choices?.[0]?.finish_reason;
 
@@ -228,6 +258,7 @@ export class CustomAIProvider {
                 progress.report(new vscode.LanguageModelTextPart(delta.content));
               }
 
+              // 工具调用增量累积（流式 tool_calls 分片到达）
               if (delta?.tool_calls) {
                 for (const tc of delta.tool_calls) {
                   const existing = toolCallAccumulators.get(tc.index) || { arguments: "" };
@@ -238,6 +269,7 @@ export class CustomAIProvider {
                 }
               }
 
+              // 流结束时上报完整的工具调用
               if (finishReason === "tool_calls") {
                 for (const [, tc] of toolCallAccumulators) {
                   if (tc.name && tc.id) {
@@ -252,7 +284,7 @@ export class CustomAIProvider {
               }
             }
           } catch {
-            // Skip invalid JSON
+            // 跳过无效 JSON 行
           }
         }
       }
@@ -264,6 +296,10 @@ export class CustomAIProvider {
     }
   }
 
+  /**
+   * 将 Copilot Chat 的消息格式转换为 OpenAI 兼容格式
+   * 处理 User / Assistant / ToolResult / ToolCall 四种角色
+   */
   private convertMessages(
     messages: readonly vscode.LanguageModelChatRequestMessage[]
   ): Array<{ role: string; content: string | null; tool_calls?: unknown[]; tool_call_id?: string }> {
@@ -332,6 +368,21 @@ export class CustomAIProvider {
     return result;
   }
 
+  /**
+   * 根据模型的推理配置向请求 body 注入对应参数
+   *
+   * 支持的推理方案（reasoningProfile）：
+   *   off     — 不注入任何推理参数
+   *   openai  — reasoning_effort（low/medium/high）
+   *   deepseek — thinking:{type} + reasoning_effort
+   *   glm     — thinking:{type}
+   *   qwen    — enable_thinking + thinking_budget
+   *   claude  — thinking:{type,budget_tokens} + output_config.effort
+   *   gemini  — generationConfig.thinkingConfig
+   *   stepfun — reasoning_effort（同 OpenAI）
+   *   minimax — reasoning_split
+   *   custom  — 通用参数注入
+   */
   private applyReasoningOptions(
     body: Record<string, unknown>,
     model: AIModel,
@@ -356,10 +407,12 @@ export class CustomAIProvider {
       return;
     }
 
+    // OpenAI / 阶跃星辰：reasoning_effort
     if ((profile === "openai" || profile === "stepfun") && effort && this.isAllowedOption(effort, reasoningOptions)) {
       body.reasoning_effort = effort;
     }
 
+    // DeepSeek：thinking.type + reasoning_effort
     if (profile === "deepseek") {
       if (thinking && this.isAllowedOption(thinking, thinkingOptions)) {
         body.thinking = { type: thinking };
@@ -369,18 +422,21 @@ export class CustomAIProvider {
       }
     }
 
+    // 智谱 GLM：thinking.type
     if (profile === "glm") {
       if (thinking && this.isAllowedOption(thinking, thinkingOptions)) {
         body.thinking = { type: thinking };
       }
     }
 
+    // 通义千问 Qwen：enable_thinking + thinking_budget
     if (profile === "qwen") {
       if (thinking === "enabled") body.enable_thinking = true;
       if (thinking === "disabled") body.enable_thinking = false;
       if (budget) body.thinking_budget = budget;
     }
 
+    // Claude：thinking（adaptive / enabled+token预算 / disabled）+ output_config
     if (profile === "claude") {
       if (thinking === "adaptive") {
         body.thinking = { type: "adaptive" };
@@ -397,6 +453,7 @@ export class CustomAIProvider {
       }
     }
 
+    // Gemini：generationConfig.thinkingConfig
     if (profile === "gemini") {
       const thinkingConfig: Record<string, unknown> = {};
       if (effort && this.isAllowedOption(effort, reasoningOptions)) {
@@ -413,12 +470,14 @@ export class CustomAIProvider {
       }
     }
 
+    // 自定义：通用参数注入
     if (profile === "custom") {
       if (effort) body.reasoning_effort = effort;
       if (thinking) body.thinking = { type: thinking };
       if (budget) body.thinking_budget = budget;
     }
 
+    // MiniMax：reasoning_split
     if (profile === "minimax" && thinking === "enabled") {
       body.reasoning_split = true;
     }
@@ -426,6 +485,7 @@ export class CustomAIProvider {
     this.mergeCustomRequestParams(body, model);
   }
 
+  /** 根据供应商名称、baseUrl、模型名自动推断推理方案 */
   private resolveReasoningProfile(model: AIModel, provider: Provider): string {
     const explicit = (model.reasoningProfile || "auto").toLowerCase();
     if (explicit !== "auto") return explicit;
@@ -442,10 +502,12 @@ export class CustomAIProvider {
     return "custom";
   }
 
+  /** 检查值是否在允许的选项列表中 */
   private isAllowedOption(value: string, options: string[]): boolean {
     return options.length === 0 || options.includes(value);
   }
 
+  /** 合并用户自定义的请求参数（JSON 格式深度合并到 body 中） */
   private mergeCustomRequestParams(body: Record<string, unknown>, model: AIModel): void {
     if (!model.customRequestParams || !model.customRequestParams.trim()) return;
     try {
@@ -458,6 +520,7 @@ export class CustomAIProvider {
     }
   }
 
+  /** 深度合并两个对象 */
   private deepMerge(target: Record<string, unknown>, source: Record<string, unknown>): void {
     for (const [key, value] of Object.entries(source)) {
       if (
@@ -475,6 +538,7 @@ export class CustomAIProvider {
     }
   }
 
+  /** Token 计数（简易估算：4 字符 ≈ 1 token） */
   async provideTokenCount(
     _modelInfo: vscode.LanguageModelChatInformation,
     text: string,

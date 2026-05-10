@@ -1,3 +1,13 @@
+/**
+ * extension.ts — 扩展主入口
+ *
+ * 职责：
+ *   1. 激活扩展 + 注册命令 + 迁移旧配置
+ *   2. 快速添加模型（QuickPick 流程，不走 Webview）
+ *   3. 配置面板 Webview（供应商管理 + 模型可见性勾选）
+ *   4. 从 API 获取模型列表并解析元数据（上下文窗口、推理选项等）
+ */
+
 import * as vscode from "vscode";
 import { CustomAIProvider } from "./provider.js";
 import { initLogger, log } from "./logger.js";
@@ -17,6 +27,7 @@ import {
 let provider: CustomAIProvider | undefined;
 let configPanel: vscode.WebviewPanel | undefined;
 
+/** API 返回的模型元数据 */
 interface FetchedModelInfo {
   id: string;
   maxInputTokens?: number;
@@ -24,6 +35,12 @@ interface FetchedModelInfo {
   thinkingTypeOptions?: string[];
 }
 
+/**
+ * 扩展激活入口
+ * - 启动日志
+ * - 迁移旧格式配置
+ * - 注册 chat participant + 命令 + language model provider
+ */
 export function activate(context: vscode.ExtensionContext): void {
   initLogger();
   log("Extension activating...");
@@ -103,7 +120,8 @@ You can also open the config panel with:
 }
 
 // ══════════════════════════════════════════════════════
-//  Quick Add Model (lightning-fast flow, no webview)
+//  Quick Add Model — 快速添加流程（不走 Webview）
+//  用户选择预设供应商 → 填 API Key → 自动获取模型列表 → 多选勾选 → 保存
 // ══════════════════════════════════════════════════════
 
 async function quickAddModel(): Promise<void> {
@@ -165,6 +183,7 @@ async function quickAddModel(): Promise<void> {
     apiKey: apiKey?.trim() || "",
   };
 
+  // 从 /models 端点获取可用模型列表及其元数据
   const fetchedModels: FetchedModelInfo[] = [];
   try {
     const url = baseUrl.trim().replace(/\/$/, "") + "/models";
@@ -203,6 +222,7 @@ async function quickAddModel(): Promise<void> {
 
   await saveProvider(newProvider);
 
+  // 去重：跳过已存在的模型
   const existingModels = getModels();
   const existingModelNames = new Set(
     existingModels
@@ -246,9 +266,10 @@ async function quickAddModel(): Promise<void> {
 }
 
 // ══════════════════════════════════════════════════════
-//  Config Panel Webview
+//  Config Panel Webview — 配置面板（供应商管理 + 模型勾选）
 // ══════════════════════════════════════════════════════
 
+/** 通过 Extension Host 的 Node.js fetch 请求 API（不受 CORS 限制） */
 async function fetchAvailableModels(baseUrl: string, apiKey: string): Promise<FetchedModelInfo[]> {
   const url = baseUrl.replace(/\/$/, "") + "/models";
   const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -259,6 +280,10 @@ async function fetchAvailableModels(baseUrl: string, apiKey: string): Promise<Fe
   return parseFetchedModels(await response.json());
 }
 
+/**
+ * 解析 API 返回的模型列表为 FetchedModelInfo 数组
+ * 兼容多种 API 响应格式：{data:[...]}, {models:[...]}, 纯数组
+ */
 function parseFetchedModels(payload: unknown): FetchedModelInfo[] {
   const rawModels = Array.isArray(payload)
     ? payload
@@ -273,6 +298,7 @@ function parseFetchedModels(payload: unknown): FetchedModelInfo[] {
     .filter((model): model is FetchedModelInfo => !!model?.id);
 }
 
+/** 解析单个 API 模型对象（可能是字符串或对象） */
 function parseFetchedModel(raw: unknown): FetchedModelInfo | undefined {
   if (typeof raw === "string") {
     return { id: raw };
@@ -475,6 +501,7 @@ function showConfigPanel(context: vscode.ExtensionContext): void {
 
   configPanel.webview.html = getWebviewContent();
 
+  // 重试 5 次发送配置数据（解决 Webview 初始化竞态）
   let retries = 0;
   const retrySend = setInterval(() => {
     sendConfig();
@@ -485,6 +512,7 @@ function showConfigPanel(context: vscode.ExtensionContext): void {
   configPanel.onDidDispose(() => { configPanel = undefined; });
 }
 
+/** 向 Webview 发送完整的 providers + models 配置数据 */
 function sendConfig(): void {
   const p = getProviders();
   const m = getModels();
