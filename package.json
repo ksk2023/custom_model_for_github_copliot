@@ -12,7 +12,7 @@
     "github.copilot-chat"
   ],
   "extensionKind": [
-    "workspace"
+    "ui"
   ],
   "categories": [
     "AI",
