@@ -64,15 +64,15 @@ Save and go — the extension detects changes and reloads the model list automat
 
 | Provider | Base URL | Example Models |
 |---|---|---|
-| 🟦 **阶跃星辰** Step | `https://api.stepfun.com/v1` | Step-1.5V, Step-2 |
-| 🟩 **智谱 AI** GLM | `https://open.bigmodel.cn/api/paas/v4` | GLM-4 |
-| 🟧 **月之暗面** Moonshot | `https://api.moonshot.cn/v1` | moonshot-v1-8k/32k/128k |
-| 🔴 **DeepSeek** | `https://api.deepseek.com/v1` | DeepSeek-V3, DeepSeek-R1 |
-| 🟫 **百川** Baichuan | `https://api.baichuan-ai.com/v1` | Baichuan4 |
-| 🟨 **零一万物** Yi | `https://api.lingyiwanwu.com/v1` | yi-large, yi-medium |
-| ⬛ **OpenAI** | `https://api.openai.com/v1` | GPT-4o, GPT-4 |
-| 🟪 **Anthropic** | `https://api.anthropic.com/v1` | Claude 3.5 Sonnet |
-| 🐪 **Ollama** | `http://localhost:11434/v1` | Llama, Mistral |
+| 🟦 **阶跃星辰** Step | `https://api.stepfun.com/v1` | step-3.5-flash-2603, step-3.5-flash |
+| 🟩 **智谱 AI** GLM | `https://open.bigmodel.cn/api/paas/v4` | glm-5.1, glm-5, glm-5-turbo |
+| 🟧 **月之暗面** Moonshot | `https://api.moonshot.cn/v1` | kimi-k2.6, kimi-k2.5, moonshot-v1-128k |
+| 🔴 **DeepSeek** | `https://api.deepseek.com/v1` | deepseek-v4-pro, deepseek-v4-flash |
+| 🟫 **百川** Baichuan | `https://api.baichuan-ai.com/v1` | Baichuan4, Baichuan4-Air |
+| 🟨 **零一万物** Yi | `https://api.lingyiwanwu.com/v1` | yi-lightning, yi-large, yi-medium |
+| ⬛ **OpenAI** | `https://api.openai.com/v1` | gpt-4.1, gpt-4o, o3 |
+| 🟪 **Anthropic** | `https://api.anthropic.com/v1` | claude-sonnet-4, claude-3.5-sonnet |
+| 🐪 **Ollama** | `http://localhost:11434/v1` | llama3.2, qwen2.5, deepseek-r1 |
 | 🔗 **Custom** | Any OpenAI-compatible API | Varies |
 
 ---
