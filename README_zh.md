@@ -1,59 +1,126 @@
-# Custom Copilot Chat
+# 🚀 Custom Copilot Chat
 
 [English](./README.md) | [中文](./README_zh.md)
 
+![VS Code](https://img.shields.io/badge/VS%20Code-%23007ACC?style=flat&logo=visual-studio-code&logoColor=white)
+![Version](https://img.shields.io/badge/version-1.1.2-blue?style=flat)
+![License](https://img.shields.io/badge/license-MIT-green?style=flat)
+![TypeScript](https://img.shields.io/badge/TypeScript-%23007ACC?style=flat&logo=typescript&logoColor=white)
+
 ---
 
-## 功能特性
+## ✨ 功能特性
 
-- **自定义模型支持** - 在 GitHub Copilot Chat 模型选择器中添加任何 OpenAI 兼容的 API
-- **国内模型预设** - 阶跃星辰、智谱AI、月之暗面、DeepSeek、百川、零一万物
-- **动态获取模型** - 填写 Base URL 和 API Key 后，自动从 API 获取可用模型列表
-- **可视化配置** - 通过 VS Code 设置面板轻松配置
-- **快速添加** - 常用提供商的预设模板
+<table>
+  <tr>
+    <td width="50%">
 
-## 支持的提供商
+### 🧩 多提供商支持
+
+支持所有 **OpenAI 兼容 API**，包括 OpenAI、Anthropic、Ollama 等任意接口。
+
+### 🇨🇳 国内模型开箱即用
+
+内置阶跃星辰、智谱AI、月之暗面、DeepSeek、百川、零一万物等国内主流大模型预设。
+
+### 🔄 动态获取模型
+
+填入 Base URL 和 API Key → 点击 **"获取可用模型"** → 自动拉取当前接口支持的所有模型。
+
+### 🎨 可视化配置
+
+全部通过 VS Code Webview 面板完成配置，无需手动编辑 JSON 文件。
+
+### ⚡ 快速添加模板
+
+每个内置提供商均有一键快捷模板，数秒内完成配置。
+
+    </td>
+    <td>
+
+### 🛡️ 双层架构
+
+`提供商 → 模型` 两层配置。一个提供商可管理多个模型，各自拥有独立的温度、Token 上限等参数。
+
+### 🌡️ 逐模型温度控制
+
+每款模型可单独设置 `temperature` 和 `maxTokens`，灵活覆盖全局默认值。
+
+### 🔑 安全密钥存储
+
+API Key 通过 VS Code 原生 `secretStorage` 加密保存，不落盘明文。
+
+### 🔄 配置变更自动重载
+
+保存配置后扩展自动感知变更并刷新模型列表，无需手动重启。
+
+    </td>
+  </tr>
+</table>
+
+---
+
+## 📦 支持的提供商
 
 | 提供商 | Base URL | 示例模型 |
-|--------|----------|----------|
-| 阶跃星辰 (Step) | `https://api.stepfun.com/v1` | Step-1.5V, Step-2 |
-| 智谱 AI (GLM) | `https://open.bigmodel.cn/api/paas/v4` | GLM-4 |
-| 月之暗面 (Moonshot) | `https://api.moonshot.cn/v1` | moonshot-v1-8k/32k/128k |
-| DeepSeek | `https://api.deepseek.com/v1` | DeepSeek-V3, DeepSeek-R1 |
-| 百川 (Baichuan) | `https://api.baichuan-ai.com/v1` | Baichuan4 |
-| 零一万物 (Yi) | `https://api.lingyiwanwu.com/v1` | yi-large, yi-medium |
-| OpenAI | `https://api.openai.com/v1` | GPT-4o, GPT-4 |
-| Anthropic | `https://api.anthropic.com/v1` | Claude 3.5 Sonnet |
-| Ollama | `http://localhost:11434/v1` | Llama, Mistral |
-| 自定义 | 任何 OpenAI 兼容 API | 不同提供商各异 |
+|---|---|---|
+| 🟦 **阶跃星辰** Step | `https://api.stepfun.com/v1` | Step-1.5V, Step-2 |
+| 🟩 **智谱 AI** GLM | `https://open.bigmodel.cn/api/paas/v4` | GLM-4 |
+| 🟧 **月之暗面** Moonshot | `https://api.moonshot.cn/v1` | moonshot-v1-8k/32k/128k |
+| 🔴 **DeepSeek** | `https://api.deepseek.com/v1` | DeepSeek-V3, DeepSeek-R1 |
+| 🟫 **百川** Baichuan | `https://api.baichuan-ai.com/v1` | Baichuan4 |
+| 🟨 **零一万物** Yi | `https://api.lingyiwanwu.com/v1` | yi-large, yi-medium |
+| ⬛ **OpenAI** | `https://api.openai.com/v1` | GPT-4o, GPT-4 |
+| 🟪 **Anthropic** | `https://api.anthropic.com/v1` | Claude 3.5 Sonnet |
+| 🐪 **Ollama** | `http://localhost:11434/v1` | Llama, Mistral |
+| 🔗 **自定义** | 任意 OpenAI 兼容 API | 视接口而定 |
 
-## 安装
+---
 
-1. 从 [Releases](https://github.com/ksk2023/custom_model_for_github_copliot/releases) 下载 `.vsix` 文件
-2. 在 VS Code 中安装：
-   ```bash
-   code --install-extension custom-copilot-chat-1.0.9.vsix
-   ```
-3. 或者直接在 VS Code 中双击 `.vsix` 文件安装
+## 📥 安装
 
-## 快速开始
+### 方式一：VSIX（推荐）
 
-1. 按 `Ctrl+Shift+P` → 输入 "Custom AI: Quick Add Model"
-2. 选择提供商（如阶跃星辰）
-3. 填写 Base URL 和 API Key
-4. 点击"获取可用模型列表"自动获取模型
-5. 从下拉列表选择要启用的模型
-6. 打开 Copilot Chat 选择你的模型
+1. 从 [Releases](https://github.com/ksk2023/custom_model_for_github_copliot/releases) 下载最新 `.vsix` 文件
+2. 打开 VS Code → **扩展面板**（<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>X</kbd>）
+3. 点击 **⋯** 菜单 → **从 VSIX 安装...**
+4. 选择下载的文件
 
-## 配置
+### 方式二：命令行
 
-### 方式一：配置面板
+```bash
+code --install-extension custom-copilot-chat-1.1.2.vsix
+```
 
-1. 按 `Ctrl+Shift+P` → "Custom AI: Open Config"
-2. 点击 "+ 添加模型"
-3. 选择提供商，填写 Base URL 和 API Key
-4. 点击"获取可用模型列表"
-5. 选择模型并保存
+---
+
+## ⚡ 快速开始
+
+### 1. 添加模型
+
+按 <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> → **"Custom AI: Quick Add Model"**
+
+然后：
+- 选择 **提供商**（如阶跃星辰）
+- 填入 **Base URL** 和 **API Key**
+- 点击 **"获取可用模型列表"**
+- 勾选模型 → **保存**
+
+### 2. 在 Copilot Chat 中使用
+
+打开 Copilot Chat（<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>I</kbd>）→ 在**模型下拉菜单**选择你添加的模型 → 开始对话。
+
+---
+
+## ⚙️ 配置说明
+
+### 方式一：配置面板（推荐）
+
+1. <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> → **"Custom AI: Open Config"**
+2. 点击 **+ 添加模型**
+3. 选择提供商，填入 URL 和密钥
+4. 点击 **获取可用模型列表**
+5. 选择模型并 **保存**
 
 ### 方式二：设置 JSON
 
@@ -61,37 +128,55 @@
 {
   "customai.models": [
     {
-      "id": "1234567890",
-      "name": "我的 GPT-4",
-      "provider": "openai",
-      "baseUrl": "https://api.openai.com/v1",
-      "apiKey": "sk-...",
-      "modelName": "gpt-4-turbo-preview",
-      "enabled": true
+      "id": "model-001",
+      "name": "我的 GPT-4o",
+      "providerId": "openai",
+      "modelName": "gpt-4o",
+      "enabled": true,
+      "temperature": 0.7,
+      "maxTokens": 8192
     }
   ]
 }
 ```
 
-## 使用方法
+---
 
-1. **打开 Copilot Chat** - 按 `Ctrl+Shift+I` (Windows/Linux) 或 `Cmd+Shift+I` (Mac)
-2. **选择模型** - 在模型下拉菜单中选择你配置的模型
-3. **开始对话** - 像使用 Copilot 一样正常对话
+## 🔧 配置项说明
 
-## 常见问题
+| 配置项 | 默认值 | 说明 |
+|---|---|---|
+| `customai.models` | `[]` | 已配置的自定义模型列表 |
+| `customai.providers` | `[]` | 提供商端点列表 |
+| `customai.defaultTemperature` | `0.7` | 默认回复温度（0–2） |
+| `customai.defaultMaxTokens` | `4096` | 默认单次最大 Token 数 |
+| `customai.debug` | `false` | 开启调试日志 |
 
-**Q: 模型没有出现在选择器中？**
-- 确保已安装并启用了扩展
+---
+
+## ❓ 常见问题
+
+**Q: 模型没有出现在 Copilot Chat 选择器中？**
+
+- 确认扩展已**安装并启用**
 - 检查 `customai.models` 配置是否正确
-- 尝试重新加载 VS Code 窗口
+- 尝试**重载窗口**（<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> → *Developer: Reload Window*）
 
 **Q: API 请求失败？**
-- 验证 API Key 是否正确
-- 检查 Base URL 是否可访问
-- 确认模型名称是否有效
 
-## 开发
+- 核对 **API Key** 是否正确
+- 确认 **Base URL** 网络可访问
+- 检查**模型名称**是否该提供商支持的
+
+**Q: 如何使用 Ollama 本地模型？**
+
+1. 确保 Ollama 正在运行：`ollama serve`
+2. 使用 Base URL `http://localhost:11434/v1` — 无需 API Key
+3. 填写本地模型名称（如 `llama3.2`）
+
+---
+
+## 🛠️ 开发
 
 ```bash
 # 安装依赖
@@ -100,10 +185,12 @@ npm install
 # 编译 TypeScript
 npm run compile
 
-# 打包 vsix
+# 打包 VSIX
 npm run build
 ```
 
-## 许可证
+---
 
-MIT
+## 📄 许可证
+
+[MIT](LICENSE)
