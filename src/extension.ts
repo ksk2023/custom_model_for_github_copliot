@@ -186,7 +186,7 @@ async function quickAddModel(): Promise<void> {
   // 从 /models 端点获取可用模型列表及其元数据
   const fetchedModels: FetchedModelInfo[] = [];
   try {
-    const url = baseUrl.trim().replace(/\/$/, "") + "/models";
+    const url = resolveModelsEndpoint(baseUrl);
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
     const resp = await fetch(url, { method: "GET", headers });
@@ -271,13 +271,84 @@ async function quickAddModel(): Promise<void> {
 
 /** 通过 Extension Host 的 Node.js fetch 请求 API（不受 CORS 限制） */
 async function fetchAvailableModels(baseUrl: string, apiKey: string): Promise<FetchedModelInfo[]> {
-  const url = baseUrl.replace(/\/$/, "") + "/models";
+  const url = resolveModelsEndpoint(baseUrl);
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
   log(`Fetching models from: ${url}`);
   const response = await fetch(url, { method: "GET", headers });
   if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
   return parseFetchedModels(await response.json());
+}
+
+async function testProviderConnection(
+  baseUrl: string,
+  apiKey: string,
+  modelName: string,
+  providerName: string
+): Promise<{ ok: boolean; detail: string }> {
+  const isAnthropic = providerName.toLowerCase().includes("anthropic") || providerName.toLowerCase().includes("claude");
+  const endpoint = resolveChatEndpoint(baseUrl, isAnthropic);
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "Accept": "application/json, text/event-stream",
+  };
+  const body: Record<string, unknown> = isAnthropic
+    ? {
+        model: modelName || "claude-3-5-sonnet-latest",
+        max_tokens: 16,
+        messages: [{ role: "user", content: "ping" }],
+      }
+    : {
+        model: modelName || "test",
+        messages: [{ role: "user", content: "ping" }],
+        stream: false,
+        max_tokens: 16,
+      };
+
+  if (apiKey) {
+    if (isAnthropic) {
+      headers["x-api-key"] = apiKey;
+      headers["anthropic-version"] = "2023-06-01";
+    } else {
+      headers["Authorization"] = `Bearer ${apiKey}`;
+    }
+  }
+
+  try {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      return { ok: false, detail: `HTTP ${response.status}: ${text.slice(0, 180)}` };
+    }
+    return { ok: true, detail: text ? text.slice(0, 120).replace(/\s+/g, " ") : "连接正常" };
+  } catch (err) {
+    return { ok: false, detail: (err as Error).message };
+  }
+}
+
+function resolveModelsEndpoint(baseUrl: string): string {
+  const trimmed = baseUrl.trim().replace(/\/$/, "");
+  if (trimmed.endsWith("/models")) return trimmed;
+  if (trimmed.endsWith("/chat/completions")) {
+    return trimmed.replace(/\/chat\/completions$/, "/models");
+  }
+  if (trimmed.endsWith("/messages")) {
+    return trimmed.replace(/\/messages$/, "/models");
+  }
+  return `${trimmed}/models`;
+}
+
+function resolveChatEndpoint(baseUrl: string, isAnthropic: boolean): string {
+  const trimmed = baseUrl.trim().replace(/\/$/, "");
+  if (isAnthropic) {
+    return trimmed.endsWith("/messages") ? trimmed : `${trimmed}/messages`;
+  }
+  if (trimmed.endsWith("/chat/completions")) return trimmed;
+  return `${trimmed}/chat/completions`;
 }
 
 /**
@@ -484,6 +555,21 @@ function showConfigPanel(context: vscode.ExtensionContext): void {
         } catch (err: any) {
           configPanel?.webview.postMessage({ type: "modelsFetchError", error: err.message, providerId: message.providerId });
         }
+        break;
+      }
+      case "testProvider": {
+        const result = await testProviderConnection(
+          message.baseUrl,
+          message.apiKey || "",
+          message.modelName || "",
+          message.providerName || ""
+        );
+        configPanel?.webview.postMessage({
+          type: "providerTestResult",
+          providerId: message.providerId,
+          ok: result.ok,
+          detail: result.detail,
+        });
         break;
       }
       case "saveModels": {

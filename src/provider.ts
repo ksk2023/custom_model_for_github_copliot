@@ -148,6 +148,7 @@ export class CustomAIProvider {
     log(`provideLanguageModelChatResponse called for model: ${model.displayName} (provider: ${provider.name})`);
 
     const apiMessages = this.convertMessages(messages);
+    const isAnthropic = provider.name.toLowerCase().includes("anthropic") || provider.name.toLowerCase().includes("claude");
 
     const config = vscode.workspace.getConfiguration("customai");
     const temperature = config.get<number>("defaultTemperature", 0.7);
@@ -159,8 +160,8 @@ export class CustomAIProvider {
       stream: true,
       temperature,
     };
-    const isAnthropic = provider.name.toLowerCase().includes("anthropic") || provider.name.toLowerCase().includes("claude");
     this.applyReasoningOptions(body, model, provider, isAnthropic);
+    log(`Request reasoning profile=${this.resolveReasoningProfile(model, provider)}, effort=${model.reasoningEffort || "default"}, thinking=${model.thinkingType || "default"}, budget=${model.thinkingBudget || "default"}`);
 
     // 工具调用：仅 OpenAI 兼容协议支持
     if (!isAnthropic && options.tools && options.tools.length > 0) {
@@ -175,38 +176,38 @@ export class CustomAIProvider {
       body.tool_choice = "auto";
     }
 
-    let endpoint = provider.baseUrl.replace(/\/$/, "");
+    const endpoint = this.resolveEndpoint(provider.baseUrl, isAnthropic);
 
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
+      "Accept": "text/event-stream, application/json",
     };
 
-    if (provider.apiKey) {
-      if (isAnthropic) {
-        // Anthropic 协议：x-api-key 头 + /messages 端点
-        headers["x-api-key"] = provider.apiKey;
-        headers["anthropic-version"] = "2023-06-01";
-        endpoint += "/messages";
-        delete body.model;
-        delete body.temperature;
-        (body as Record<string, unknown>).model = model.modelName;
-        (body as Record<string, unknown>).max_tokens = maxTokens;
-      } else {
-        // OpenAI 兼容协议：Bearer 头 + /chat/completions 端点
-        headers["Authorization"] = `Bearer ${provider.apiKey}`;
-        endpoint += "/chat/completions";
-        (body as Record<string, unknown>).max_tokens = maxTokens;
-      }
+    if (isAnthropic) {
+      // Anthropic 协议：x-api-key 头 + /messages 端点
+      if (provider.apiKey) headers["x-api-key"] = provider.apiKey;
+      headers["anthropic-version"] = "2023-06-01";
+      delete body.temperature;
+      (body as Record<string, unknown>).model = model.modelName;
+      (body as Record<string, unknown>).max_tokens = maxTokens;
+    } else {
+      // OpenAI 兼容协议：Bearer 头 + /chat/completions 端点
+      if (provider.apiKey) headers["Authorization"] = `Bearer ${provider.apiKey}`;
+      (body as Record<string, unknown>).max_tokens = maxTokens;
     }
 
     progress.report(new vscode.LanguageModelTextPart(""));
 
     try {
+      const abortController = new AbortController();
+      const cancellation = token.onCancellationRequested(() => abortController.abort());
       const response = await fetch(endpoint, {
         method: "POST",
         headers,
         body: JSON.stringify(body),
+        signal: abortController.signal,
       });
+      cancellation.dispose();
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -217,10 +218,21 @@ export class CustomAIProvider {
         throw new Error("No response body");
       }
 
+      const contentType = response.headers.get("content-type") || "";
+      if (!contentType.includes("text/event-stream")) {
+        const payload = await response.text();
+        const emitted = this.reportJsonResponse(payload, progress, isAnthropic);
+        if (!emitted) {
+          throw new Error(`API returned no text content: ${payload.slice(0, 500)}`);
+        }
+        return;
+      }
+
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
       const toolCallAccumulators: Map<number, { id?: string; name?: string; arguments: string }> = new Map();
+      let emittedText = false;
 
       while (true) {
         if (token.isCancellationRequested) {
@@ -235,28 +247,26 @@ export class CustomAIProvider {
         buffer = lines.pop() || "";
 
         for (const line of lines) {
-          if (line.trim() === "" || !line.startsWith("data: ")) continue;
+          const trimmedLine = line.trim();
+          if (trimmedLine === "" || trimmedLine.startsWith(":") || trimmedLine.startsWith("event:")) continue;
 
-          const data = line.slice(6);
+          const data = trimmedLine.startsWith("data:") ? trimmedLine.slice(5).trim() : trimmedLine;
           if (data === "[DONE]") continue;
 
           try {
             const parsed = JSON.parse(data);
+            const text = this.extractResponseText(parsed, isAnthropic);
+            if (text) {
+              emittedText = true;
+              progress.report(new vscode.LanguageModelTextPart(text));
+            }
 
             if (isAnthropic) {
-              // Anthropic 流式解析
-              const text = parsed.delta?.text || parsed.content?.[0]?.text || "";
-              if (text) {
-                progress.report(new vscode.LanguageModelTextPart(text));
-              }
+              // Anthropic text_delta 已由 extractResponseText 处理
             } else {
               // OpenAI 兼容流式解析
               const delta = parsed.choices?.[0]?.delta;
               const finishReason = parsed.choices?.[0]?.finish_reason;
-
-              if (delta?.content) {
-                progress.report(new vscode.LanguageModelTextPart(delta.content));
-              }
 
               // 工具调用增量累积（流式 tool_calls 分片到达）
               if (delta?.tool_calls) {
@@ -287,6 +297,13 @@ export class CustomAIProvider {
             // 跳过无效 JSON 行
           }
         }
+      }
+      if (buffer.trim()) {
+        const flushed = this.reportJsonResponse(buffer.trim().replace(/^data:\s*/, ""), progress, isAnthropic);
+        emittedText = emittedText || flushed;
+      }
+      if (!emittedText) {
+        throw new Error("API response completed without text content; check stream format or disable streaming in reverse proxy.");
       }
     } catch (error) {
       if ((error as Error).name === "AbortError") {
@@ -366,6 +383,96 @@ export class CustomAIProvider {
     }
 
     return result;
+  }
+
+  private resolveEndpoint(baseUrl: string, isAnthropic: boolean): string {
+    const trimmed = baseUrl.trim().replace(/\/$/, "");
+    if (isAnthropic) {
+      return trimmed.endsWith("/messages") ? trimmed : `${trimmed}/messages`;
+    }
+    if (trimmed.endsWith("/chat/completions") || trimmed.endsWith("/responses")) {
+      return trimmed;
+    }
+    return `${trimmed}/chat/completions`;
+  }
+
+  private reportJsonResponse(
+    payload: string,
+    progress: vscode.Progress<vscode.LanguageModelResponsePart>,
+    isAnthropic: boolean
+  ): boolean {
+    const chunks = payload
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line && line !== "[DONE]" && !line.startsWith("event:") && !line.startsWith(":"))
+      .map((line) => line.startsWith("data:") ? line.slice(5).trim() : line);
+
+    let emitted = false;
+    const candidates = chunks.length > 0 ? chunks : [payload];
+    for (const chunk of candidates) {
+      if (!chunk || chunk === "[DONE]") continue;
+      let parsed: any;
+      try {
+        parsed = JSON.parse(chunk);
+      } catch {
+        if (candidates.length === 1 && chunk && !chunk.startsWith("{") && !chunk.startsWith("[")) {
+          progress.report(new vscode.LanguageModelTextPart(chunk));
+          emitted = true;
+        }
+        continue;
+      }
+      if (parsed?.error) {
+        const message = parsed.error.message || JSON.stringify(parsed.error);
+        throw new Error(`API Error: ${message}`);
+      }
+      const text = this.extractResponseText(parsed, isAnthropic);
+      if (text) {
+        progress.report(new vscode.LanguageModelTextPart(text));
+        emitted = true;
+      }
+    }
+    return emitted;
+  }
+
+  private extractResponseText(parsed: any, isAnthropic: boolean): string {
+    if (!parsed) return "";
+    if (parsed.error) {
+      throw new Error(parsed.error.message || JSON.stringify(parsed.error));
+    }
+
+    if (typeof parsed.output_text === "string") return parsed.output_text;
+    if (typeof parsed.text === "string") return parsed.text;
+    if (typeof parsed.response === "string") return parsed.response;
+
+    if (Array.isArray(parsed.output)) {
+      return parsed.output
+        .flatMap((item: any) => Array.isArray(item.content) ? item.content : [])
+        .map((content: any) => content.text || content.output_text || "")
+        .join("");
+    }
+
+    if (isAnthropic) {
+      const deltaText = parsed.delta?.text || parsed.delta?.partial_json || "";
+      if (deltaText) return deltaText;
+      if (Array.isArray(parsed.content)) {
+        return parsed.content.map((item: any) => item.text || "").join("");
+      }
+      if (Array.isArray(parsed.message?.content)) {
+        return parsed.message.content.map((item: any) => item.text || "").join("");
+      }
+    }
+
+    const choice = parsed.choices?.[0];
+    if (choice?.delta?.content) return choice.delta.content;
+    if (choice?.message?.content) {
+      if (typeof choice.message.content === "string") return choice.message.content;
+      if (Array.isArray(choice.message.content)) {
+        return choice.message.content.map((item: any) => item.text || item.content || "").join("");
+      }
+    }
+    if (choice?.text) return choice.text;
+
+    return "";
   }
 
   /**

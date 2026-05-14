@@ -275,6 +275,9 @@ function getWebviewScript(): string {
   lines.push("      if (msg.type === 'modelsFetchError') {");
   lines.push("        showError(msg.providerId, msg.error || '未知错误');");
   lines.push("      }");
+  lines.push("      if (msg.type === 'providerTestResult') {");
+  lines.push("        setFetchStatus(msg.providerId, msg.ok ? ('✓ 测试成功: ' + msg.detail) : ('测试失败: ' + msg.detail));");
+  lines.push("      }");
   lines.push("    } catch (err) {");
   lines.push("      showFatal('消息处理错误', err);");
   lines.push("    }");
@@ -309,6 +312,7 @@ function getWebviewScript(): string {
   lines.push("      html += '<div class=\"provider-meta\">' + esc(provider.baseUrl) + '</div>'; ");
   lines.push("      html += '</div>';");
   lines.push("      html += '<div class=\"provider-actions\">';");
+  lines.push("      html += '<button class=\"btn btn-primary btn-sm\" data-action=\"test\" data-id=\"' + attr(provider.id) + '\">测试</button>'; ");
   lines.push("      html += '<button class=\"btn btn-primary btn-sm\" data-action=\"fetch\" data-id=\"' + attr(provider.id) + '\">获取模型</button>'; ");
   lines.push("      html += '<button class=\"btn btn-primary btn-sm\" data-action=\"edit\" data-id=\"' + attr(provider.id) + '\">编辑</button>'; ");
   lines.push("      html += '<button class=\"btn btn-danger btn-sm\" data-action=\"delete\" data-id=\"' + attr(provider.id) + '\">删除</button>'; ");
@@ -355,6 +359,7 @@ function getWebviewScript(): string {
   lines.push("        var action = button.getAttribute('data-action');");
   lines.push("        var id = button.getAttribute('data-id');");
   lines.push("        if (action === 'fetch') fetchModels(id);");
+  lines.push("        if (action === 'test') testProvider(id);");
   lines.push("        if (action === 'edit') showModal(id);");
   lines.push("        if (action === 'delete') askDelete(id);");
   lines.push("        if (action === 'all-visible') toggleAll(id, true);");
@@ -471,6 +476,15 @@ function getWebviewScript(): string {
   lines.push("    if (deletingId) vscode.postMessage({ type: 'deleteProvider', id: deletingId });");
   lines.push("    hideModal('modalDelete');");
   lines.push("    deletingId = null;");
+  lines.push("  }");
+  lines.push("");
+  lines.push("  function testProvider(providerId) {");
+  lines.push("    var provider = getProvider(providerId);");
+  lines.push("    if (!provider) return;");
+  lines.push("    var providerModels = getProviderModels(providerId);");
+  lines.push("    var modelName = providerModels.length > 0 ? providerModels[0].modelName : '';");
+  lines.push("    setFetchStatus(providerId, '测试中...');");
+  lines.push("    vscode.postMessage({ type: 'testProvider', providerId: providerId, baseUrl: provider.baseUrl, apiKey: provider.apiKey || '', modelName: modelName, providerName: provider.name });");
   lines.push("  }");
   lines.push("");
   lines.push("  function fetchModels(providerId) {");
