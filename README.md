@@ -86,10 +86,18 @@ Save and go — the extension detects changes and reloads the model list automat
 3. Click the **⋯** menu → **Install from VSIX...**
 4. Select the downloaded file
 
+The same VSIX supports local Windows, local Linux, WSL, and remote Linux extension hosts.
+
 ### Option 2: Command Line
 
 ```bash
-code --install-extension custom-copilot-chat-1.1.2.vsix
+code --install-extension custom-copilot-chat-1.1.7.vsix
+```
+
+For WSL or a remote Linux host, run the command from that connected VS Code window, or use:
+
+```bash
+code --remote wsl+Ubuntu --install-extension custom-copilot-chat-1.1.7.vsix
 ```
 
 ---

@@ -86,10 +86,18 @@ API Key 通过 VS Code 原生 `secretStorage` 加密保存，不落盘明文。
 3. 点击 **⋯** 菜单 → **从 VSIX 安装...**
 4. 选择下载的文件
 
+同一个 VSIX 同时支持本地 Windows、本地 Linux、WSL 和远程 Linux 扩展主机。
+
 ### 方式二：命令行
 
 ```bash
-code --install-extension custom-copilot-chat-1.1.2.vsix
+code --install-extension custom-copilot-chat-1.1.7.vsix
+```
+
+如果要安装到 WSL 或远程 Linux，请在已经连接到该环境的 VS Code 窗口里运行安装命令，或者使用：
+
+```bash
+code --remote wsl+Ubuntu --install-extension custom-copilot-chat-1.1.7.vsix
 ```
 
 ---
