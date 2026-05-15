@@ -91,13 +91,13 @@ The same VSIX supports local Windows, local Linux, WSL, and remote Linux extensi
 ### Option 2: Command Line
 
 ```bash
-code --install-extension custom-copilot-chat-1.1.7.vsix
+code --install-extension custom-copilot-chat-1.1.8.vsix
 ```
 
 For WSL or a remote Linux host, run the command from that connected VS Code window, or use:
 
 ```bash
-code --remote wsl+Ubuntu --install-extension custom-copilot-chat-1.1.7.vsix
+code --remote wsl+Ubuntu --install-extension custom-copilot-chat-1.1.8.vsix
 ```
 
 ---

@@ -233,6 +233,7 @@ export class CustomAIProvider {
       let buffer = "";
       const toolCallAccumulators: Map<number, { id?: string; name?: string; arguments: string }> = new Map();
       let emittedText = false;
+      const unknownChunkPreviews: string[] = [];
 
       while (true) {
         if (token.isCancellationRequested) {
@@ -259,6 +260,8 @@ export class CustomAIProvider {
             if (text) {
               emittedText = true;
               progress.report(new vscode.LanguageModelTextPart(text));
+            } else {
+              this.captureUnknownChunkPreview(unknownChunkPreviews, data);
             }
 
             if (isAnthropic) {
@@ -294,7 +297,7 @@ export class CustomAIProvider {
               }
             }
           } catch {
-            // 跳过无效 JSON 行
+            this.captureUnknownChunkPreview(unknownChunkPreviews, data);
           }
         }
       }
@@ -303,7 +306,10 @@ export class CustomAIProvider {
         emittedText = emittedText || flushed;
       }
       if (!emittedText) {
-        throw new Error("API response completed without text content; check stream format or disable streaming in reverse proxy.");
+        if (unknownChunkPreviews.length > 0) {
+          log(`No text emitted from stream. Sample chunks: ${unknownChunkPreviews.join(" | ")}`);
+        }
+        throw new Error("API response completed without text content; unsupported stream format. See the Custom AI output log, or set JSON参数 to {\"stream\":false} for this model.");
       }
     } catch (error) {
       if ((error as Error).name === "AbortError") {
@@ -440,39 +446,94 @@ export class CustomAIProvider {
       throw new Error(parsed.error.message || JSON.stringify(parsed.error));
     }
 
+    const parts: string[] = [];
+    const add = (value: unknown): void => {
+      const text = this.extractTextValue(value);
+      if (text) parts.push(text);
+    };
+
     if (typeof parsed.output_text === "string") return parsed.output_text;
     if (typeof parsed.text === "string") return parsed.text;
     if (typeof parsed.response === "string") return parsed.response;
+    if (typeof parsed.delta === "string") return parsed.delta;
+    if (typeof parsed.content === "string") return parsed.content;
+
+    if (parsed.data && typeof parsed.data === "object") {
+      add(this.extractResponseText(parsed.data, isAnthropic));
+    }
+
+    if (parsed.response && typeof parsed.response === "object") {
+      add(this.extractResponseText(parsed.response, isAnthropic));
+    }
 
     if (Array.isArray(parsed.output)) {
-      return parsed.output
+      add(parsed.output
         .flatMap((item: any) => Array.isArray(item.content) ? item.content : [])
-        .map((content: any) => content.text || content.output_text || "")
-        .join("");
+        .map((content: any) => this.extractTextValue(content))
+        .join(""));
     }
 
     if (isAnthropic) {
       const deltaText = parsed.delta?.text || parsed.delta?.partial_json || "";
-      if (deltaText) return deltaText;
-      if (Array.isArray(parsed.content)) {
-        return parsed.content.map((item: any) => item.text || "").join("");
-      }
-      if (Array.isArray(parsed.message?.content)) {
-        return parsed.message.content.map((item: any) => item.text || "").join("");
-      }
+      if (deltaText) add(deltaText);
+      if (Array.isArray(parsed.content)) add(parsed.content);
+      if (Array.isArray(parsed.message?.content)) add(parsed.message.content);
     }
+
+    add(parsed.delta?.content);
+    add(parsed.delta?.text);
+    add(parsed.delta?.output_text);
+    add(parsed.delta?.reasoning_content);
+    add(parsed.delta?.reasoning);
+    add(parsed.delta?.thinking);
+    add(parsed.content);
 
     const choice = parsed.choices?.[0];
-    if (choice?.delta?.content) return choice.delta.content;
+    add(choice?.delta?.content);
+    add(choice?.delta?.text);
+    add(choice?.delta?.output_text);
+    add(choice?.delta?.reasoning_content);
+    add(choice?.delta?.reasoning);
+    add(choice?.delta?.thinking);
     if (choice?.message?.content) {
-      if (typeof choice.message.content === "string") return choice.message.content;
-      if (Array.isArray(choice.message.content)) {
-        return choice.message.content.map((item: any) => item.text || item.content || "").join("");
-      }
+      add(choice.message.content);
     }
-    if (choice?.text) return choice.text;
+    add(choice?.message?.reasoning_content);
+    add(choice?.message?.reasoning);
+    add(choice?.text);
 
+    return parts.join("");
+  }
+
+  private extractTextValue(value: unknown): string {
+    if (!value) return "";
+    if (typeof value === "string") return value;
+    if (Array.isArray(value)) {
+      return value.map((item) => this.extractTextValue(item)).join("");
+    }
+    if (typeof value !== "object") return "";
+
+    const record = value as Record<string, unknown>;
+    const fields = [
+      "text",
+      "output_text",
+      "content",
+      "delta",
+      "reasoning_content",
+      "reasoning",
+      "thinking",
+      "partial_json",
+    ];
+    for (const field of fields) {
+      const text = this.extractTextValue(record[field]);
+      if (text) return text;
+    }
     return "";
+  }
+
+  private captureUnknownChunkPreview(previews: string[], chunk: string): void {
+    if (previews.length >= 5 || !chunk) return;
+    previews.push(chunk.slice(0, 300).replace(/\s+/g, " "));
   }
 
   /**
