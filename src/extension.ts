@@ -752,19 +752,16 @@ function resolveModelEndpoints(baseUrl: string): string[] {
   const urls = new Set<string>([primary]);
 
   try {
-    const parsed = new URL(primary);
-    const variants: Array<[string, string]> = [
-      ["all", "true"],
-      ["include", "all"],
-      ["full", "true"],
-      ["with_metadata", "true"],
-      ["limit", "1000"],
-    ];
-
-    for (const [key, value] of variants) {
-      const variant = new URL(parsed.toString());
-      variant.searchParams.set(key, value);
-      urls.add(variant.toString());
+    const parsedBase = new URL(baseUrl.trim());
+    const path = parsedBase.pathname.replace(/\/+$/, "");
+    if (!path || path === "/" || path === "/v1" || path.endsWith("/chat/completions")) {
+      urls.add(`${parsedBase.origin}/v1/models`);
+    }
+    if (path === "/openai" || path.endsWith("/openai")) {
+      urls.add(`${parsedBase.origin}${path}/v1/models`);
+    }
+    if (!path.includes("/v1")) {
+      urls.add(`${baseUrl.trim().replace(/\/$/, "")}/v1/models`);
     }
   } catch {
     // 保持 primary；无效 URL 会在实际请求时返回明确错误。
@@ -846,6 +843,9 @@ function collectModelCandidates(payload: unknown, depth = 0, inModelList = true)
       "modeloptions",
       "chatmodels",
       "llms",
+      "list",
+      "rows",
+      "records",
       "items",
       "results",
     ].includes(normalizedKey);
