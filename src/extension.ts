@@ -788,7 +788,7 @@ function resolveChatEndpoint(baseUrl: string, isAnthropic: boolean): string {
  */
 function parseFetchedModels(payload: unknown): FetchedModelInfo[] {
   const merged = new Map<string, FetchedModelInfo>();
-  for (const raw of collectModelCandidates(payload)) {
+  for (const raw of collectModelCandidates(payload, 0, Array.isArray(payload))) {
     const model = parseFetchedModel(raw);
     if (model?.id && !merged.has(model.id)) {
       merged.set(model.id, model);
@@ -821,7 +821,7 @@ function collectModelCandidates(payload: unknown, depth = 0, inModelList = true)
     result.push(record);
   }
 
-  if (inModelList && !isLikelyModelRecord(record)) {
+  if (inModelList && !isLikelyModelRecord(record) && looksLikeModelMap(record)) {
     for (const [modelId, value] of Object.entries(record)) {
       if (value && typeof value === "object" && !Array.isArray(value)) {
         result.push({ id: modelId, ...(value as Record<string, unknown>) });
@@ -848,9 +848,6 @@ function collectModelCandidates(payload: unknown, depth = 0, inModelList = true)
       "llms",
       "items",
       "results",
-      "result",
-      "payload",
-      "response",
     ].includes(normalizedKey);
     if (isModelContainer || arrayLooksLikeModelList(value)) {
       result.push(...collectModelCandidates(value, depth + 1, isModelContainer));
@@ -860,6 +857,19 @@ function collectModelCandidates(payload: unknown, depth = 0, inModelList = true)
   }
 
   return result;
+}
+
+function looksLikeModelMap(record: Record<string, unknown>): boolean {
+  const entries = Object.entries(record).filter(([key]) => !isEnvelopeKey(key));
+  if (entries.length === 0) return false;
+  return entries.every(([key, value]) => {
+    if (!looksLikeModelId(key)) return false;
+    return value === true
+      || value === null
+      || typeof value === "string"
+      || isLikelyModelRecord(value)
+      || (value !== undefined && value !== null && typeof value === "object" && !Array.isArray(value));
+  });
 }
 
 function arrayLooksLikeModelList(value: unknown): boolean {
@@ -873,10 +883,61 @@ function isLikelyModelRecord(raw: unknown): raw is Record<string, unknown> {
   return !!readString(record, ["id", "name", "model", "modelName", "model_name", "slug", "value", "label"]);
 }
 
+function isEnvelopeKey(key: string): boolean {
+  return [
+    "object",
+    "success",
+    "ok",
+    "status",
+    "code",
+    "message",
+    "error",
+    "data",
+    "result",
+    "results",
+    "payload",
+    "response",
+    "meta",
+    "metadata",
+    "pagination",
+    "page",
+    "total",
+    "count",
+  ].includes(key.toLowerCase().replace(/[-_\s]/g, ""));
+}
+
+function looksLikeModelId(value: string): boolean {
+  const id = value.trim().toLowerCase();
+  if (!id || isEnvelopeKey(id)) return false;
+  return /[/:.\-]/.test(id)
+    || /^(gpt|o\d|chatgpt|claude|gemini|deepseek|qwen|glm|kimi|moonshot|yi-|llama|mistral|mixtral|command|doubao|ernie|hunyuan|step|baichuan|minimax)/.test(id);
+}
+
+function isReservedModelId(value: string): boolean {
+  return [
+    "object",
+    "success",
+    "ok",
+    "status",
+    "code",
+    "message",
+    "error",
+    "data",
+    "result",
+    "results",
+    "payload",
+    "response",
+    "list",
+    "true",
+    "false",
+  ].includes(value.trim().toLowerCase());
+}
+
 /** 解析单个 API 模型对象（可能是字符串或对象） */
 function parseFetchedModel(raw: unknown): FetchedModelInfo | undefined {
   if (typeof raw === "string") {
-    return { id: raw };
+    const id = raw.trim();
+    return id && !isReservedModelId(id) ? { id } : undefined;
   }
   if (!raw || typeof raw !== "object") {
     return undefined;
@@ -884,7 +945,7 @@ function parseFetchedModel(raw: unknown): FetchedModelInfo | undefined {
 
   const record = raw as Record<string, unknown>;
   const id = readString(record, ["id", "name", "model", "modelName", "model_name", "slug", "value", "label"]);
-  if (!id) return undefined;
+  if (!id || isReservedModelId(id)) return undefined;
 
   const supportedParameters = readStringArray(record.supported_parameters || record.supportedParameters);
   const inputModalities = readStringArray(readPath(record, "architecture.input_modalities") || record.input_modalities || record.inputModalities);

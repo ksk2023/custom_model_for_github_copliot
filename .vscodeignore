@@ -5,6 +5,7 @@
 src/**
 node_modules/**
 deepseek-extracted/**
+releases/**
 *.vsix
 *.log
 tsconfig.json
