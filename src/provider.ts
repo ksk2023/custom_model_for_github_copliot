@@ -368,6 +368,21 @@ export class CustomAIProvider {
     if (trimmed.endsWith("/chat/completions") || trimmed.endsWith("/responses")) {
       return trimmed;
     }
+    try {
+      const parsed = new URL(trimmed);
+      const path = parsed.pathname.replace(/\/+$/, "");
+      if (!path || path === "/" || path === "/v1") {
+        return `${parsed.origin}/v1/chat/completions`;
+      }
+      if (path.endsWith("/v1")) {
+        return `${parsed.origin}${path}/chat/completions`;
+      }
+      if (path === "/openai" || path.endsWith("/openai")) {
+        return `${parsed.origin}${path}/v1/chat/completions`;
+      }
+    } catch {
+      // Fall back to legacy concatenation for non-standard URLs.
+    }
     return `${trimmed}/chat/completions`;
   }
 
@@ -718,6 +733,9 @@ export class CustomAIProvider {
     const contentType = response.contentType;
     if (!contentType.includes("text/event-stream")) {
       const payload = await response.text();
+      if (this.isHtmlResponse(contentType, payload)) {
+        throw new Error(`API returned an HTML page instead of a model response. Check Base URL; OpenAI-compatible relay hosts should resolve to /v1/chat/completions. Resolved endpoint: ${endpoint}`);
+      }
       const emitted = this.reportJsonResponse(payload, progress, isAnthropic);
       if (!emitted) {
         throw new Error(`API returned no text content: ${payload.slice(0, 500)}`);
@@ -781,6 +799,15 @@ export class CustomAIProvider {
         : "";
       throw new Error(`API response completed without text content; unsupported stream format. See the Custom AI output log.${sample}`);
     }
+  }
+
+  private isHtmlResponse(contentType: string, payload: string): boolean {
+    const trimmed = payload.trim().slice(0, 200).toLowerCase();
+    return contentType.toLowerCase().includes("text/html")
+      || trimmed.startsWith("<!doctype html")
+      || trimmed.startsWith("<html")
+      || trimmed.includes("<head")
+      || trimmed.includes("<body");
   }
 
   private async postJsonAndReportWithEndpointFallback(

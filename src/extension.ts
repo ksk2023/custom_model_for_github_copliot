@@ -776,6 +776,21 @@ function resolveChatEndpoint(baseUrl: string, isAnthropic: boolean): string {
     return trimmed.endsWith("/messages") ? trimmed : `${trimmed}/messages`;
   }
   if (trimmed.endsWith("/chat/completions")) return trimmed;
+  try {
+    const parsed = new URL(trimmed);
+    const path = parsed.pathname.replace(/\/+$/, "");
+    if (!path || path === "/" || path === "/v1") {
+      return `${parsed.origin}/v1/chat/completions`;
+    }
+    if (path.endsWith("/v1")) {
+      return `${parsed.origin}${path}/chat/completions`;
+    }
+    if (path === "/openai" || path.endsWith("/openai")) {
+      return `${parsed.origin}${path}/v1/chat/completions`;
+    }
+  } catch {
+    // 保持旧行为，给非标准 URL 一个明确的请求结果。
+  }
   return `${trimmed}/chat/completions`;
 }
 
