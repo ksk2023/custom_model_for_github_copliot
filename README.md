@@ -3,7 +3,7 @@
 [English](./README.md) | [中文](./README_zh.md)
 
 ![VS Code](https://img.shields.io/badge/VS%20Code-%23007ACC?style=flat&logo=visual-studio-code&logoColor=white)
-![Version](https://img.shields.io/badge/version-1.1.23-blue?style=flat)
+![Version](https://img.shields.io/badge/version-1.1.24-blue?style=flat)
 ![License](https://img.shields.io/badge/license-MIT-green?style=flat)
 ![TypeScript](https://img.shields.io/badge/TypeScript-%23007ACC?style=flat&logo=typescript&logoColor=white)
 
@@ -34,6 +34,10 @@ No JSON editing required. Configure everything through a clean, interactive VS C
 ### 🧬 Fingerprint Management
 
 Add, edit, delete, and activate per-provider fingerprint headers for relays or local reverse proxies that require session/device fingerprints.
+
+### ✍️ Manual Models & Presets
+
+When `/models` is incomplete, manually add model IDs or import GPT, Gemini, Claude, and DeepSeek presets from the sidebar.
 
 ### ⚡ Quick Add Templates
 

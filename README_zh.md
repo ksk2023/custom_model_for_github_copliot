@@ -3,7 +3,7 @@
 [English](./README.md) | [中文](./README_zh.md)
 
 ![VS Code](https://img.shields.io/badge/VS%20Code-%23007ACC?style=flat&logo=visual-studio-code&logoColor=white)
-![Version](https://img.shields.io/badge/version-1.1.23-blue?style=flat)
+![Version](https://img.shields.io/badge/version-1.1.24-blue?style=flat)
 ![License](https://img.shields.io/badge/license-MIT-green?style=flat)
 ![TypeScript](https://img.shields.io/badge/TypeScript-%23007ACC?style=flat&logo=typescript&logoColor=white)
 
@@ -34,6 +34,10 @@
 ### 🧬 指纹管理
 
 每个供应商可新增、编辑、删除并启用指纹 Header，适配需要设备指纹或会话指纹的中转站/本地反代。
+
+### ✍️ 手动模型与预设导入
+
+自动获取不完整时，可在侧边栏手动添加模型 ID，或一键导入 GPT、Gemini、Claude、DeepSeek 等常用预设。
 
 ### ⚡ 快速添加模板
 
