@@ -242,7 +242,32 @@ export class CustomAIProvider {
           const fallbackBody = this.createLocalCompatibilityBody(body);
           const fallbackHeaders = this.createLocalCompatibilityHeaders(headers, fallbackBody);
           this.logRequestShape(endpoint, fallbackBody, "minimal-fallback");
-          await this.postJsonAndReportWithEndpointFallback(endpointCandidates, fallbackHeaders, fallbackBody, progress, isAnthropic, token);
+          try {
+            await this.postJsonAndReportWithEndpointFallback(endpointCandidates, fallbackHeaders, fallbackBody, progress, isAnthropic, token);
+          } catch (fallbackError) {
+            if (!this.shouldRetryLocalCompatibility(fallbackError) || token.isCancellationRequested) {
+              throw fallbackError;
+            }
+            log(`Minimal fallback failed after ${this.describeError(fallbackError)}; trying single-turn local fallback`);
+            const singleTurnBody = this.createSingleTurnLocalCompatibilityBody(body);
+            const singleTurnHeaders = this.createLocalCompatibilityHeaders(headers, singleTurnBody);
+            this.logRequestShape(endpoint, singleTurnBody, "single-turn-fallback");
+            await this.postJsonAndReportWithEndpointFallback(endpointCandidates, singleTurnHeaders, singleTurnBody, progress, isAnthropic, token);
+          }
+          return;
+        }
+
+        if (
+          localEndpoint
+          && localCompatibilityMode === "minimal"
+          && this.shouldRetryLocalCompatibility(error)
+          && !token.isCancellationRequested
+        ) {
+          log(`Minimal local compatibility request failed after ${this.describeError(error)}; trying single-turn local fallback`);
+          const singleTurnBody = this.createSingleTurnLocalCompatibilityBody(body);
+          const singleTurnHeaders = this.createLocalCompatibilityHeaders(headers, singleTurnBody);
+          this.logRequestShape(endpoint, singleTurnBody, "single-turn-fallback");
+          await this.postJsonAndReportWithEndpointFallback(endpointCandidates, singleTurnHeaders, singleTurnBody, progress, isAnthropic, token);
           return;
         }
 
@@ -532,6 +557,27 @@ export class CustomAIProvider {
     }
 
     return compatible;
+  }
+
+  private createSingleTurnLocalCompatibilityBody(body: Record<string, unknown>): Record<string, unknown> {
+    const messages = this.normalizeMessagesForLocalCompatibility(body.messages);
+    const latestUserMessage = [...messages]
+      .reverse()
+      .find((message) => {
+        if (!message || typeof message !== "object") return false;
+        const record = message as Record<string, unknown>;
+        return record.role === "user" && typeof record.content === "string" && record.content.trim().length > 0;
+      });
+    const fallbackMessage = latestUserMessage || messages[messages.length - 1] || {
+      role: "user",
+      content: "Please answer the latest user request.",
+    };
+
+    return {
+      model: body.model,
+      messages: [fallbackMessage],
+      stream: false,
+    };
   }
 
   private normalizeMessagesForLocalCompatibility(value: unknown): unknown[] {
