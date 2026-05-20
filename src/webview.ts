@@ -661,11 +661,12 @@ function getWebviewScript(): string {
   lines.push("      var fetchedModel = normalizeFetchedModel(fetchedIds[j]);");
   lines.push("      var modelName = fetchedModel.id;");
   lines.push("      if (!modelName || existingIds[modelName]) continue;");
+  lines.push("      var modelLabel = fetchedModel.displayName && fetchedModel.displayName !== modelName ? fetchedModel.displayName : modelName;");
   lines.push("      models.push({");
   lines.push("        id: 'm_' + Date.now() + '_' + j + '_' + Math.random().toString(36).slice(2, 7),");
   lines.push("        providerId: providerId,");
   lines.push("        modelName: modelName,");
-  lines.push("        displayName: getProviderName(providerId) + ' - ' + modelName,");
+  lines.push("        displayName: getProviderName(providerId) + ' - ' + modelLabel,");
   lines.push("        maxInputTokens: fetchedModel.maxInputTokens || inferMaxInputTokens(modelName, getProviderName(providerId)),");
   lines.push("        reasoningProfile: 'auto',");
   lines.push("        reasoningEffort: 'default',");
@@ -819,7 +820,8 @@ function getWebviewScript(): string {
   lines.push("    if (typeof raw === 'string') return { id: raw };");
   lines.push("    if (!raw || typeof raw !== 'object') return { id: '' };");
   lines.push("    return {");
-  lines.push("      id: String(raw.id || raw.name || raw.model || ''),");
+  lines.push("      id: String(raw.id || raw.name || raw.model || raw.modelName || raw.model_name || raw.slug || raw.value || raw.label || ''),");
+  lines.push("      displayName: raw.displayName || raw.display_name || raw.title || raw.name || '',");
   lines.push("      maxInputTokens: readTokenLimit(raw),");
   lines.push("      reasoningEffortOptions: readOptionList(raw, ['reasoningEffortOptions', 'reasoning_effort_options', 'reasoning_efforts', 'supported_reasoning_efforts', 'supported_reasoning_effort'], ['reasoning_effort', 'reasoning.effort', 'reasoning', 'effort']),");
   lines.push("      thinkingTypeOptions: readOptionList(raw, ['thinkingTypeOptions', 'thinking_type_options', 'thinking_types', 'supported_thinking_types'], ['thinking.type', 'thinking', 'type'])");

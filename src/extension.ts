@@ -34,9 +34,12 @@ const configWebviews = new Set<vscode.Webview>();
 /** API 返回的模型元数据 */
 interface FetchedModelInfo {
   id: string;
+  displayName?: string;
   maxInputTokens?: number;
   reasoningEffortOptions?: string[];
   thinkingTypeOptions?: string[];
+  supportedParameters?: string[];
+  inputModalities?: string[];
 }
 
 /**
@@ -300,7 +303,7 @@ async function fetchAvailableModels(providerConfig: Pick<Provider, "baseUrl" | "
   const errors: string[] = [];
 
   for (const url of urls) {
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    const headers: Record<string, string> = { "Accept": "application/json" };
     if (providerConfig.apiKey) headers["Authorization"] = `Bearer ${providerConfig.apiKey}`;
     applyProviderFingerprintHeaders(headers, providerConfig);
     log(`Fetching models from: ${url}`);
@@ -800,7 +803,7 @@ function collectModelCandidates(payload: unknown, depth = 0, inModelList = true)
   if (Array.isArray(payload)) {
     const result: unknown[] = [];
     for (const item of payload) {
-      if (inModelList || typeof item === "string" || isLikelyModelRecord(item)) {
+      if (inModelList || isLikelyModelRecord(item)) {
         result.push(item);
       }
       result.push(...collectModelCandidates(item, depth + 1, false));
@@ -818,21 +821,38 @@ function collectModelCandidates(payload: unknown, depth = 0, inModelList = true)
     result.push(record);
   }
 
+  if (inModelList && !isLikelyModelRecord(record)) {
+    for (const [modelId, value] of Object.entries(record)) {
+      if (value && typeof value === "object" && !Array.isArray(value)) {
+        result.push({ id: modelId, ...(value as Record<string, unknown>) });
+      } else if (typeof value === "string") {
+        result.push({ id: modelId, name: value });
+      } else if (value === true || value === null) {
+        result.push({ id: modelId });
+      }
+    }
+  }
+
   for (const [key, value] of Object.entries(record)) {
     const normalizedKey = key.toLowerCase().replace(/[-_\s]/g, "");
     const isModelContainer = [
       "data",
       "models",
       "modellist",
+      "modelinfo",
+      "modelinfos",
+      "modelinfolist",
       "availablemodels",
       "modeloptions",
+      "chatmodels",
+      "llms",
       "items",
       "results",
       "result",
       "payload",
       "response",
     ].includes(normalizedKey);
-    if (isModelContainer || Array.isArray(value)) {
+    if (isModelContainer || arrayLooksLikeModelList(value)) {
       result.push(...collectModelCandidates(value, depth + 1, isModelContainer));
     } else if (value && typeof value === "object" && depth < 4) {
       result.push(...collectModelCandidates(value, depth + 1, false));
@@ -840,6 +860,11 @@ function collectModelCandidates(payload: unknown, depth = 0, inModelList = true)
   }
 
   return result;
+}
+
+function arrayLooksLikeModelList(value: unknown): boolean {
+  if (!Array.isArray(value) || value.length === 0) return false;
+  return value.slice(0, 8).some((item) => isLikelyModelRecord(item));
 }
 
 function isLikelyModelRecord(raw: unknown): raw is Record<string, unknown> {
@@ -861,8 +886,20 @@ function parseFetchedModel(raw: unknown): FetchedModelInfo | undefined {
   const id = readString(record, ["id", "name", "model", "modelName", "model_name", "slug", "value", "label"]);
   if (!id) return undefined;
 
+  const supportedParameters = readStringArray(record.supported_parameters || record.supportedParameters);
+  const inputModalities = readStringArray(readPath(record, "architecture.input_modalities") || record.input_modalities || record.inputModalities);
+  const reasoningEffortOptions = readOptionList(record, [
+    "reasoningEffortOptions",
+    "reasoning_effort_options",
+    "reasoning_efforts",
+    "supported_reasoning_efforts",
+    "supported_reasoning_effort",
+  ], ["reasoning_effort", "reasoning.effort", "reasoning", "effort"])
+    || inferReasoningOptionsFromRelayMetadata(record, supportedParameters);
+
   return {
     id,
+    displayName: readString(record, ["displayName", "display_name", "title", "name"]),
     maxInputTokens: readTokenLimit(record, [
       "maxInputTokens",
       "max_input_tokens",
@@ -876,20 +913,23 @@ function parseFetchedModel(raw: unknown): FetchedModelInfo | undefined {
       "maxContextTokens",
       "n_ctx",
     ]),
-    reasoningEffortOptions: readOptionList(record, [
-      "reasoningEffortOptions",
-      "reasoning_effort_options",
-      "reasoning_efforts",
-      "supported_reasoning_efforts",
-      "supported_reasoning_effort",
-    ], ["reasoning_effort", "reasoning.effort", "reasoning", "effort"]),
+    reasoningEffortOptions,
     thinkingTypeOptions: readOptionList(record, [
       "thinkingTypeOptions",
       "thinking_type_options",
       "thinking_types",
       "supported_thinking_types",
     ], ["thinking.type", "thinking", "type"]),
+    supportedParameters: supportedParameters.length > 0 ? supportedParameters : undefined,
+    inputModalities: inputModalities.length > 0 ? inputModalities : undefined,
   };
+}
+
+function inferReasoningOptionsFromRelayMetadata(record: Record<string, unknown>, supportedParameters: string[]): string[] | undefined {
+  const hasReasoningParam = supportedParameters.some((item) => item.toLowerCase().includes("reasoning") || item.toLowerCase().includes("thinking"));
+  const internalReasoning = readNumber(readPath(record, "pricing.internal_reasoning"));
+  const supportsReasoning = hasReasoningParam || !!internalReasoning || !!readPath(record, "features.reasoning");
+  return supportsReasoning ? ["low", "medium", "high"] : undefined;
 }
 
 function readString(record: Record<string, unknown>, keys: string[]): string | undefined {
