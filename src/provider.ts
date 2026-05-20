@@ -215,6 +215,7 @@ export class CustomAIProvider {
       if (provider.apiKey) headers["Authorization"] = `Bearer ${provider.apiKey}`;
       (body as Record<string, unknown>).max_tokens = maxTokens;
     }
+    this.applyProviderFingerprintHeaders(headers, provider);
 
     const requestBody = localEndpoint && localCompatibilityMode === "minimal"
       ? this.createLocalCompatibilityBody(body)
@@ -583,6 +584,51 @@ export class CustomAIProvider {
     }
 
     return compatible;
+  }
+
+  private applyProviderFingerprintHeaders(headers: Record<string, string>, provider: Provider): void {
+    const fingerprint = this.resolveActiveFingerprint(provider);
+    if (!fingerprint) return;
+
+    const value = (fingerprint.value || "").trim();
+    if (!value) return;
+
+    const jsonHeaders = this.parseFingerprintHeaders(value);
+    if (jsonHeaders) {
+      Object.assign(headers, jsonHeaders);
+      log(`Applied fingerprint headers: ${fingerprint.name || fingerprint.id}`);
+      return;
+    }
+
+    const headerName = (fingerprint.headerName || "X-Fingerprint").trim() || "X-Fingerprint";
+    headers[headerName] = value;
+    log(`Applied fingerprint header ${headerName}: ${fingerprint.name || fingerprint.id}`);
+  }
+
+  private resolveActiveFingerprint(provider: Provider): { id: string; name: string; value: string; headerName?: string } | undefined {
+    const fingerprints = Array.isArray(provider.fingerprints)
+      ? provider.fingerprints.filter((item) => item && item.value)
+      : [];
+    if (fingerprints.length === 0) return undefined;
+    return fingerprints.find((item) => item.id === provider.activeFingerprintId) || fingerprints[0];
+  }
+
+  private parseFingerprintHeaders(value: string): Record<string, string> | undefined {
+    if (!value.startsWith("{")) return undefined;
+    try {
+      const parsed = JSON.parse(value) as Record<string, unknown>;
+      const source = parsed.headers && typeof parsed.headers === "object" && !Array.isArray(parsed.headers)
+        ? parsed.headers as Record<string, unknown>
+        : parsed;
+      const headers: Record<string, string> = {};
+      for (const [key, raw] of Object.entries(source)) {
+        if (!key || raw === undefined || raw === null) continue;
+        headers[key] = typeof raw === "string" ? raw : JSON.stringify(raw);
+      }
+      return Object.keys(headers).length > 0 ? headers : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   private shouldRetryLocalCompatibility(error: unknown): boolean {

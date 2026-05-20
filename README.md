@@ -3,7 +3,7 @@
 [English](./README.md) | [中文](./README_zh.md)
 
 ![VS Code](https://img.shields.io/badge/VS%20Code-%23007ACC?style=flat&logo=visual-studio-code&logoColor=white)
-![Version](https://img.shields.io/badge/version-1.1.2-blue?style=flat)
+![Version](https://img.shields.io/badge/version-1.1.19-blue?style=flat)
 ![License](https://img.shields.io/badge/license-MIT-green?style=flat)
 ![TypeScript](https://img.shields.io/badge/TypeScript-%23007ACC?style=flat&logo=typescript&logoColor=white)
 
@@ -25,11 +25,15 @@ Pre-configured for **Step, Zhipu, Moonshot, DeepSeek, Baichuan, Yi** and other d
 
 ### 🔄 Dynamic Model Fetching
 
-Enter your Base URL & API Key → click **"Fetch Models"** → pick from live model list automatically.
+Enter your Base URL & API Key → click **"Fetch Models"** → try relay-friendly model endpoints and parse nested responses.
 
 ### 🎨 Visual Config UI
 
 No JSON editing required. Configure everything through a clean, interactive VS Code webview panel.
+
+### 🧬 Fingerprint Management
+
+Add, edit, delete, and activate per-provider fingerprint headers for relays or local reverse proxies that require session/device fingerprints.
 
 ### ⚡ Quick Add Templates
 

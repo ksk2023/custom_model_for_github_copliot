@@ -66,6 +66,25 @@ export function getWebviewContent(): string {
     "    .provider-name { font-weight: 600; font-size: 13px; }",
     "    .provider-meta { font-size: 10px; color: var(--desc); margin-top: 3px; word-break: break-all; }",
     "    .provider-actions { display: flex; gap: 5px; flex-shrink: 0; }",
+    "    .fingerprint-section {",
+    "      margin-top: 10px;",
+    "      padding-top: 10px;",
+    "      border-top: 1px solid var(--border);",
+    "    }",
+    "    .fingerprint-title { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 11px; color: var(--desc); margin-bottom: 6px; }",
+    "    .fingerprint-row {",
+    "      display: flex;",
+    "      align-items: center;",
+    "      gap: 6px;",
+    "      padding: 5px 0;",
+    "      font-size: 11px;",
+    "      border-top: 1px solid rgba(128,128,128,0.18);",
+    "    }",
+    "    .fingerprint-info { flex: 1; min-width: 0; }",
+    "    .fingerprint-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }",
+    "    .fingerprint-meta { color: var(--desc); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }",
+    "    .fingerprint-actions { display: flex; gap: 4px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }",
+    "    .badge-active { background: #2e7d32; }",
     "    .badge {",
     "      display: inline-block;",
     "      background: var(--vscode-badge-background, #4d4d4d);",
@@ -157,7 +176,7 @@ export function getWebviewContent(): string {
     "      margin-bottom: 3px;",
     "      color: var(--desc);",
     "    }",
-    "    .form-group input {",
+    "    .form-group input, .form-group textarea {",
     "      width: 100%;",
     "      padding: 7px 8px;",
     "      background: var(--input-bg);",
@@ -167,7 +186,9 @@ export function getWebviewContent(): string {
     "      font-size: 12px;",
     "      font-family: inherit;",
     "    }",
-    "    .form-group input:focus { outline: none; border-color: var(--focus); }",
+    "    .form-group textarea { resize: vertical; min-height: 82px; }",
+    "    .form-help { color: var(--desc); font-size: 10px; margin-top: 4px; line-height: 1.4; }",
+    "    .form-group input:focus, .form-group textarea:focus { outline: none; border-color: var(--focus); }",
     "    .error-text { color: #f14c4c; font-size: 11px; margin-top: 8px; }",
     "    .success-text { color: #89d185; font-size: 11px; }",
     "    @media (max-width: 480px) {",
@@ -175,7 +196,7 @@ export function getWebviewContent(): string {
     "      .header { align-items: stretch; gap: 8px; flex-direction: column; }",
     "      .header .btn { width: 100%; }",
     "      .provider-header { flex-direction: column; gap: 8px; }",
-    "      .provider-actions, .models-toolbar { flex-wrap: wrap; }",
+    "      .provider-actions, .models-toolbar, .fingerprint-row { flex-wrap: wrap; }",
     "      .provider-actions .btn { flex: 1 1 auto; }",
     "      .model-row { align-items: flex-start; flex-wrap: wrap; gap: 6px; }",
     "      .model-name { flex: 1 1 calc(100% - 28px); }",
@@ -215,6 +236,30 @@ export function getWebviewContent(): string {
     "      </div>",
     "    </div>",
     "  </div>",
+    "  <div class=\"modal\" id=\"modalFingerprint\">",
+    "    <div class=\"modal-content\">",
+    "      <div class=\"modal-header\" id=\"fingerprintTitle\">添加指纹</div>",
+    "      <div class=\"modal-body\">",
+    "        <div class=\"form-group\">",
+    "          <label>指纹名称</label>",
+    "          <input type=\"text\" id=\"fpName\" placeholder=\"如：GPT Plus 本地反代\">",
+    "        </div>",
+    "        <div class=\"form-group\">",
+    "          <label>请求头名称</label>",
+    "          <input type=\"text\" id=\"fpHeaderName\" placeholder=\"默认：X-Fingerprint\">",
+    "          <div class=\"form-help\">如果下面填写 JSON，可留空；JSON 会批量写入请求头。</div>",
+    "        </div>",
+    "        <div class=\"form-group\">",
+    "          <label>指纹值 / JSON 请求头</label>",
+    "          <textarea id=\"fpValue\" placeholder=\"abc123 或 {&quot;headers&quot;:{&quot;X-Fingerprint&quot;:&quot;abc123&quot;}}\"></textarea>",
+    "        </div>",
+    "      </div>",
+    "      <div class=\"modal-footer\">",
+    "        <button class=\"btn btn-primary\" id=\"btnFingerprintCancel\">取消</button>",
+    "        <button class=\"btn btn-primary\" id=\"btnFingerprintSave\">保存指纹</button>",
+    "      </div>",
+    "    </div>",
+    "  </div>",
     "  <div class=\"modal\" id=\"modalDelete\">",
     "    <div class=\"modal-content\" style=\"width:360px\">",
     "      <div class=\"modal-header\">确认删除</div>",
@@ -244,6 +289,8 @@ function getWebviewScript(): string {
   lines.push("  var models = [];");
   lines.push("  var editingId = null;");
   lines.push("  var deletingId = null;");
+  lines.push("  var fingerprintProviderId = null;");
+  lines.push("  var editingFingerprintId = null;");
   lines.push("  var loadTimer = null;");
   lines.push("");
   lines.push("  boot();");
@@ -331,6 +378,7 @@ function getWebviewScript(): string {
   lines.push("      html += '<button class=\"btn btn-danger btn-sm\" data-action=\"delete\" data-id=\"' + attr(provider.id) + '\">删除</button>'; ");
   lines.push("      html += '</div>';");
   lines.push("      html += '</div>';");
+  lines.push("      html += renderFingerprintSection(provider);");
   lines.push("      html += '<div class=\"models-section\">';");
   lines.push("      if (providerModels.length > 0) {");
   lines.push("        html += '<div class=\"models-toolbar\">';");
@@ -357,12 +405,39 @@ function getWebviewScript(): string {
   lines.push("    bindProviderEvents();");
   lines.push("  }");
   lines.push("");
+  lines.push("  function renderFingerprintSection(provider) {");
+  lines.push("    var fingerprints = getFingerprints(provider);");
+  lines.push("    var html = '<div class=\"fingerprint-section\">';");
+  lines.push("    html += '<div class=\"fingerprint-title\"><span>指纹管理 <span class=\"badge\">' + fingerprints.length + '</span></span><button class=\"btn btn-primary btn-xs\" data-action=\"add-fingerprint\" data-id=\"' + attr(provider.id) + '\">+ 指纹</button></div>'; ");
+  lines.push("    if (fingerprints.length === 0) {");
+  lines.push("      html += '<div class=\"fingerprint-meta\">未配置指纹；需要中转站/反代专属 Header 时可添加。</div>'; ");
+  lines.push("    }");
+  lines.push("    for (var i = 0; i < fingerprints.length; i++) {");
+  lines.push("      var fp = fingerprints[i];");
+  lines.push("      var active = fp.id === provider.activeFingerprintId || (!provider.activeFingerprintId && i === 0);");
+  lines.push("      html += '<div class=\"fingerprint-row\">';");
+  lines.push("      html += '<div class=\"fingerprint-info\">';");
+  lines.push("      html += '<div class=\"fingerprint-name\">' + esc(fp.name || '未命名指纹') + (active ? '<span class=\"badge badge-active\">启用</span>' : '') + '</div>'; ");
+  lines.push("      html += '<div class=\"fingerprint-meta\">' + esc((fp.headerName || 'X-Fingerprint') + ': ' + previewFingerprint(fp.value || '')) + '</div>'; ");
+  lines.push("      html += '</div>'; ");
+  lines.push("      html += '<div class=\"fingerprint-actions\">';");
+  lines.push("      if (!active) html += '<button class=\"btn btn-primary btn-xs\" data-action=\"activate-fingerprint\" data-id=\"' + attr(provider.id) + '\" data-fingerprint-id=\"' + attr(fp.id) + '\">启用</button>'; ");
+  lines.push("      html += '<button class=\"btn btn-primary btn-xs\" data-action=\"edit-fingerprint\" data-id=\"' + attr(provider.id) + '\" data-fingerprint-id=\"' + attr(fp.id) + '\">编辑</button>'; ");
+  lines.push("      html += '<button class=\"btn btn-danger btn-xs\" data-action=\"delete-fingerprint\" data-id=\"' + attr(provider.id) + '\" data-fingerprint-id=\"' + attr(fp.id) + '\">删除</button>'; ");
+  lines.push("      html += '</div></div>'; ");
+  lines.push("    }");
+  lines.push("    html += '</div>'; ");
+  lines.push("    return html;");
+  lines.push("  }");
+  lines.push("");
   lines.push("  function bindStaticEvents() {");
   lines.push("    document.getElementById('btnAddProvider').onclick = function() { showModal(null); };");
   lines.push("    document.getElementById('btnSave').onclick = saveProvider;");
   lines.push("    document.getElementById('btnCancel').onclick = function() { hideModal('modalProvider'); };");
   lines.push("    document.getElementById('btnDeleteConfirm').onclick = confirmDelete;");
   lines.push("    document.getElementById('btnDeleteCancel').onclick = function() { hideModal('modalDelete'); deletingId = null; };");
+  lines.push("    document.getElementById('btnFingerprintSave').onclick = saveFingerprint;");
+  lines.push("    document.getElementById('btnFingerprintCancel').onclick = function() { hideModal('modalFingerprint'); fingerprintProviderId = null; editingFingerprintId = null; };");
   lines.push("  }");
   lines.push("");
   lines.push("  function bindProviderEvents() {");
@@ -371,10 +446,15 @@ function getWebviewScript(): string {
   lines.push("      button.onclick = function() {");
   lines.push("        var action = button.getAttribute('data-action');");
   lines.push("        var id = button.getAttribute('data-id');");
+  lines.push("        var fingerprintId = button.getAttribute('data-fingerprint-id');");
   lines.push("        if (action === 'fetch') fetchModels(id);");
   lines.push("        if (action === 'test') testProvider(id);");
   lines.push("        if (action === 'edit') showModal(id);");
   lines.push("        if (action === 'delete') askDelete(id);");
+  lines.push("        if (action === 'add-fingerprint') showFingerprintModal(id, null);");
+  lines.push("        if (action === 'edit-fingerprint') showFingerprintModal(id, fingerprintId);");
+  lines.push("        if (action === 'delete-fingerprint') deleteFingerprint(id, fingerprintId);");
+  lines.push("        if (action === 'activate-fingerprint') activateFingerprint(id, fingerprintId);");
   lines.push("        if (action === 'all-visible') toggleAll(id, true);");
   lines.push("        if (action === 'all-hidden') toggleAll(id, false);");
   lines.push("        if (action === 'save-models') saveModels(id);");
@@ -473,8 +553,68 @@ function getWebviewScript(): string {
   lines.push("    var url = document.getElementById('inputUrl').value.trim();");
   lines.push("    var key = document.getElementById('inputKey').value.trim();");
   lines.push("    if (!name || !url) { alert('请填写名称和 URL'); return; }");
-  lines.push("    vscode.postMessage({ type: 'saveProvider', provider: { id: editingId, name: name, baseUrl: url, apiKey: key } });");
+  lines.push("    var existing = editingId ? getProvider(editingId) : null;");
+  lines.push("    vscode.postMessage({ type: 'saveProvider', provider: { id: editingId, name: name, baseUrl: url, apiKey: key, fingerprints: getFingerprints(existing), activeFingerprintId: existing ? existing.activeFingerprintId : undefined } });");
   lines.push("    hideModal('modalProvider');");
+  lines.push("  }");
+  lines.push("");
+  lines.push("  function showFingerprintModal(providerId, fingerprintId) {");
+  lines.push("    var provider = getProvider(providerId);");
+  lines.push("    if (!provider) return;");
+  lines.push("    var fingerprint = fingerprintId ? getFingerprint(provider, fingerprintId) : null;");
+  lines.push("    fingerprintProviderId = providerId;");
+  lines.push("    editingFingerprintId = fingerprintId;");
+  lines.push("    document.getElementById('fingerprintTitle').textContent = fingerprint ? '编辑指纹' : '添加指纹';");
+  lines.push("    document.getElementById('fpName').value = fingerprint ? (fingerprint.name || '') : '';");
+  lines.push("    document.getElementById('fpHeaderName').value = fingerprint ? (fingerprint.headerName || '') : '';");
+  lines.push("    document.getElementById('fpValue').value = fingerprint ? (fingerprint.value || '') : '';");
+  lines.push("    document.getElementById('modalFingerprint').classList.add('show');");
+  lines.push("  }");
+  lines.push("");
+  lines.push("  function saveFingerprint() {");
+  lines.push("    var provider = getProvider(fingerprintProviderId);");
+  lines.push("    if (!provider) return;");
+  lines.push("    var name = document.getElementById('fpName').value.trim();");
+  lines.push("    var headerName = document.getElementById('fpHeaderName').value.trim();");
+  lines.push("    var value = document.getElementById('fpValue').value.trim();");
+  lines.push("    if (!name || !value) { alert('请填写指纹名称和指纹值'); return; }");
+  lines.push("    var fingerprints = getFingerprints(provider).slice();");
+  lines.push("    var id = editingFingerprintId || ('fp_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7));");
+  lines.push("    var next = { id: id, name: name, value: value, headerName: headerName || undefined };");
+  lines.push("    var replaced = false;");
+  lines.push("    for (var i = 0; i < fingerprints.length; i++) {");
+  lines.push("      if (fingerprints[i].id === id) { fingerprints[i] = next; replaced = true; break; }");
+  lines.push("    }");
+  lines.push("    if (!replaced) fingerprints.push(next);");
+  lines.push("    provider.fingerprints = fingerprints;");
+  lines.push("    if (!provider.activeFingerprintId) provider.activeFingerprintId = id;");
+  lines.push("    saveProviderObject(provider);");
+  lines.push("    hideModal('modalFingerprint');");
+  lines.push("    fingerprintProviderId = null;");
+  lines.push("    editingFingerprintId = null;");
+  lines.push("  }");
+  lines.push("");
+  lines.push("  function deleteFingerprint(providerId, fingerprintId) {");
+  lines.push("    var provider = getProvider(providerId);");
+  lines.push("    if (!provider || !fingerprintId) return;");
+  lines.push("    var fingerprint = getFingerprint(provider, fingerprintId);");
+  lines.push("    if (!confirm('确定删除指纹 \"' + (fingerprint ? fingerprint.name : fingerprintId) + '\" 吗？')) return;");
+  lines.push("    var fingerprints = getFingerprints(provider).filter(function(item) { return item.id !== fingerprintId; });");
+  lines.push("    provider.fingerprints = fingerprints;");
+  lines.push("    if (provider.activeFingerprintId === fingerprintId) provider.activeFingerprintId = fingerprints.length > 0 ? fingerprints[0].id : undefined;");
+  lines.push("    saveProviderObject(provider);");
+  lines.push("  }");
+  lines.push("");
+  lines.push("  function activateFingerprint(providerId, fingerprintId) {");
+  lines.push("    var provider = getProvider(providerId);");
+  lines.push("    if (!provider || !fingerprintId) return;");
+  lines.push("    provider.activeFingerprintId = fingerprintId;");
+  lines.push("    saveProviderObject(provider);");
+  lines.push("  }");
+  lines.push("");
+  lines.push("  function saveProviderObject(provider) {");
+  lines.push("    render();");
+  lines.push("    vscode.postMessage({ type: 'saveProvider', provider: provider });");
   lines.push("  }");
   lines.push("");
   lines.push("  function askDelete(id) {");
@@ -585,6 +725,25 @@ function getWebviewScript(): string {
   lines.push("      if (providers[i].id === providerId) return providers[i];");
   lines.push("    }");
   lines.push("    return null;");
+  lines.push("  }");
+  lines.push("");
+  lines.push("  function getFingerprints(provider) {");
+  lines.push("    return provider && Array.isArray(provider.fingerprints) ? provider.fingerprints : [];");
+  lines.push("  }");
+  lines.push("");
+  lines.push("  function getFingerprint(provider, fingerprintId) {");
+  lines.push("    var fingerprints = getFingerprints(provider);");
+  lines.push("    for (var i = 0; i < fingerprints.length; i++) {");
+  lines.push("      if (fingerprints[i].id === fingerprintId) return fingerprints[i];");
+  lines.push("    }");
+  lines.push("    return null;");
+  lines.push("  }");
+  lines.push("");
+  lines.push("  function previewFingerprint(value) {");
+  lines.push("    var text = String(value || '').replace(/\\s+/g, ' ').trim();");
+  lines.push("    if (!text) return '';");
+  lines.push("    if (text.length <= 14) return text.length <= 6 ? '••••••' : text.slice(0, 4) + '••••' + text.slice(-4);");
+  lines.push("    return text.slice(0, 8) + '…' + text.slice(-6);");
   lines.push("  }");
   lines.push("");
   lines.push("  function getProviderName(providerId) {");

@@ -11,11 +11,20 @@
 import * as vscode from "vscode";
 
 /** 供应商 — 用户自定义的 API 端点 */
+export interface ProviderFingerprint {
+  id: string;          // 唯一标识
+  name: string;        // 指纹显示名
+  value: string;       // 指纹值；也可填写 JSON 对象来批量注入请求头
+  headerName?: string; // 请求头名称，默认 X-Fingerprint
+}
+
 export interface Provider {
   id: string;       // 唯一标识
   name: string;     // 用户自定义名称，如"我的阶跃星辰"
   baseUrl: string;  // API 端点地址，如 https://api.stepfun.com/v1
   apiKey: string;   // 鉴权密钥
+  fingerprints?: ProviderFingerprint[]; // 可选：中转站/反代指纹
+  activeFingerprintId?: string;          // 当前启用的指纹 ID
 }
 
 /** 模型 — 从属于某个供应商 */

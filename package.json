@@ -2,7 +2,7 @@
   "name": "custom-copilot-chat",
   "displayName": "Custom Copilot Chat",
   "description": "Add custom AI models to GitHub Copilot Chat model picker - OpenAI, Claude, Ollama, and any OpenAI-compatible API",
-  "version": "1.1.18",
+  "version": "1.1.19",
   "publisher": "custom-copilot",
   "repository": "https://github.com/ksk2023/custom_model_for_github_copliot",
   "engines": {
@@ -93,7 +93,30 @@
         "customai.providers": {
           "type": "array",
           "default": [],
-          "description": "Custom AI providers (API endpoints with baseUrl and apiKey)"
+          "description": "Custom AI providers (API endpoints with baseUrl, apiKey, and optional relay fingerprints)",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "name": { "type": "string" },
+              "baseUrl": { "type": "string" },
+              "apiKey": { "type": "string" },
+              "activeFingerprintId": { "type": "string" },
+              "fingerprints": {
+                "type": "array",
+                "description": "Optional request header fingerprints for relays/reverse proxies",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": { "type": "string" },
+                    "name": { "type": "string" },
+                    "headerName": { "type": "string", "default": "X-Fingerprint" },
+                    "value": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
         },
         "customai.defaultTemperature": {
           "type": "number",

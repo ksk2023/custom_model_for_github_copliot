@@ -3,7 +3,7 @@
 [English](./README.md) | [中文](./README_zh.md)
 
 ![VS Code](https://img.shields.io/badge/VS%20Code-%23007ACC?style=flat&logo=visual-studio-code&logoColor=white)
-![Version](https://img.shields.io/badge/version-1.1.2-blue?style=flat)
+![Version](https://img.shields.io/badge/version-1.1.19-blue?style=flat)
 ![License](https://img.shields.io/badge/license-MIT-green?style=flat)
 ![TypeScript](https://img.shields.io/badge/TypeScript-%23007ACC?style=flat&logo=typescript&logoColor=white)
 
@@ -25,11 +25,15 @@
 
 ### 🔄 动态获取模型
 
-填入 Base URL 和 API Key → 点击 **"获取可用模型"** → 自动拉取当前接口支持的所有模型。
+填入 Base URL 和 API Key → 点击 **"获取可用模型"** → 多端点尝试并解析中转站嵌套返回，尽量拉全模型列表。
 
 ### 🎨 可视化配置
 
 全部通过 VS Code Webview 面板完成配置，无需手动编辑 JSON 文件。
+
+### 🧬 指纹管理
+
+每个供应商可新增、编辑、删除并启用指纹 Header，适配需要设备指纹或会话指纹的中转站/本地反代。
 
 ### ⚡ 快速添加模板
 

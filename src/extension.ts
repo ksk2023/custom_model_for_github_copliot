@@ -217,14 +217,7 @@ async function quickAddModel(): Promise<void> {
   // 从 /models 端点获取可用模型列表及其元数据
   const fetchedModels: FetchedModelInfo[] = [];
   try {
-    const url = resolveModelsEndpoint(baseUrl);
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
-    const resp = await requestWithLocalFallback(url, { method: "GET", headers });
-    if (resp.ok) {
-      const data = await resp.json();
-      fetchedModels.push(...parseFetchedModels(data));
-    }
+    fetchedModels.push(...await fetchAvailableModels(newProvider));
   } catch (err) {
     log(`quickAddModel fetchModels error: ${err}`);
   }
@@ -301,21 +294,45 @@ async function quickAddModel(): Promise<void> {
 // ══════════════════════════════════════════════════════
 
 /** 通过 Extension Host 的 Node.js fetch 请求 API（不受 CORS 限制） */
-async function fetchAvailableModels(baseUrl: string, apiKey: string): Promise<FetchedModelInfo[]> {
-  const url = resolveModelsEndpoint(baseUrl);
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
-  log(`Fetching models from: ${url}`);
-  const response = await requestWithLocalFallback(url, { method: "GET", headers });
-  if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
-  return parseFetchedModels(await response.json());
+async function fetchAvailableModels(providerConfig: Pick<Provider, "baseUrl" | "apiKey"> & Partial<Provider>): Promise<FetchedModelInfo[]> {
+  const urls = resolveModelEndpoints(providerConfig.baseUrl);
+  const merged = new Map<string, FetchedModelInfo>();
+  const errors: string[] = [];
+
+  for (const url of urls) {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (providerConfig.apiKey) headers["Authorization"] = `Bearer ${providerConfig.apiKey}`;
+    applyProviderFingerprintHeaders(headers, providerConfig);
+    log(`Fetching models from: ${url}`);
+
+    try {
+      const response = await requestWithLocalFallback(url, { method: "GET", headers });
+      if (!response.ok) {
+        errors.push(`${url}: HTTP ${response.status}: ${(await response.text()).slice(0, 160)}`);
+        continue;
+      }
+
+      for (const model of parseFetchedModels(await response.json())) {
+        if (!merged.has(model.id)) merged.set(model.id, model);
+      }
+    } catch (error) {
+      errors.push(`${url}: ${(error as Error).message}`);
+    }
+  }
+
+  if (merged.size === 0 && errors.length > 0) {
+    throw new Error(errors.join(" | "));
+  }
+
+  return Array.from(merged.values()).sort((a, b) => a.id.localeCompare(b.id));
 }
 
 async function testProviderConnection(
   baseUrl: string,
   apiKey: string,
   modelName: string,
-  providerName: string
+  providerName: string,
+  providerConfig?: Partial<Provider>
 ): Promise<{ ok: boolean; detail: string }> {
   const isAnthropic = providerName.toLowerCase().includes("anthropic") || providerName.toLowerCase().includes("claude");
   const endpoint = resolveChatEndpoint(baseUrl, isAnthropic);
@@ -344,6 +361,7 @@ async function testProviderConnection(
       headers["Authorization"] = `Bearer ${apiKey}`;
     }
   }
+  applyProviderFingerprintHeaders(headers, providerConfig);
 
   try {
     const response = await requestWithLocalFallback(endpoint, {
@@ -358,6 +376,64 @@ async function testProviderConnection(
     return { ok: true, detail: text ? text.slice(0, 120).replace(/\s+/g, " ") : "连接正常" };
   } catch (err) {
     return { ok: false, detail: (err as Error).message };
+  }
+}
+
+function resolveProviderFromMessage(message: any): Provider {
+  const existing = getProviders().find((item) => item.id === message.providerId);
+  if (existing) return existing;
+  return {
+    id: message.providerId || Date.now().toString(),
+    name: message.providerName || "Custom AI",
+    baseUrl: message.baseUrl || "",
+    apiKey: message.apiKey || "",
+    fingerprints: Array.isArray(message.fingerprints) ? message.fingerprints : [],
+    activeFingerprintId: message.activeFingerprintId,
+  };
+}
+
+function applyProviderFingerprintHeaders(headers: Record<string, string>, providerConfig?: Partial<Provider>): void {
+  const fingerprint = resolveActiveFingerprint(providerConfig);
+  if (!fingerprint) return;
+
+  const value = (fingerprint.value || "").trim();
+  if (!value) return;
+
+  const jsonHeaders = parseFingerprintHeaders(value);
+  if (jsonHeaders) {
+    Object.assign(headers, jsonHeaders);
+    log(`Applied fingerprint headers for model fetch: ${fingerprint.name || fingerprint.id}`);
+    return;
+  }
+
+  const headerName = (fingerprint.headerName || "X-Fingerprint").trim() || "X-Fingerprint";
+  headers[headerName] = value;
+  log(`Applied fingerprint header ${headerName} for model fetch: ${fingerprint.name || fingerprint.id}`);
+}
+
+function resolveActiveFingerprint(providerConfig?: Partial<Provider>): { id: string; name: string; value: string; headerName?: string } | undefined {
+  const fingerprints = Array.isArray(providerConfig?.fingerprints)
+    ? providerConfig.fingerprints.filter((item) => item && item.value)
+    : [];
+  if (fingerprints.length === 0) return undefined;
+  return fingerprints.find((item) => item.id === providerConfig?.activeFingerprintId) || fingerprints[0];
+}
+
+function parseFingerprintHeaders(value: string): Record<string, string> | undefined {
+  if (!value.startsWith("{")) return undefined;
+  try {
+    const parsed = JSON.parse(value) as Record<string, unknown>;
+    const source = parsed.headers && typeof parsed.headers === "object" && !Array.isArray(parsed.headers)
+      ? parsed.headers as Record<string, unknown>
+      : parsed;
+    const result: Record<string, string> = {};
+    for (const [key, raw] of Object.entries(source)) {
+      if (!key || raw === undefined || raw === null) continue;
+      result[key] = typeof raw === "string" ? raw : JSON.stringify(raw);
+    }
+    return Object.keys(result).length > 0 ? result : undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -668,6 +744,32 @@ function resolveModelsEndpoint(baseUrl: string): string {
   return `${trimmed}/models`;
 }
 
+function resolveModelEndpoints(baseUrl: string): string[] {
+  const primary = resolveModelsEndpoint(baseUrl);
+  const urls = new Set<string>([primary]);
+
+  try {
+    const parsed = new URL(primary);
+    const variants: Array<[string, string]> = [
+      ["all", "true"],
+      ["include", "all"],
+      ["full", "true"],
+      ["with_metadata", "true"],
+      ["limit", "1000"],
+    ];
+
+    for (const [key, value] of variants) {
+      const variant = new URL(parsed.toString());
+      variant.searchParams.set(key, value);
+      urls.add(variant.toString());
+    }
+  } catch {
+    // 保持 primary；无效 URL 会在实际请求时返回明确错误。
+  }
+
+  return Array.from(urls);
+}
+
 function resolveChatEndpoint(baseUrl: string, isAnthropic: boolean): string {
   const trimmed = baseUrl.trim().replace(/\/$/, "");
   if (isAnthropic) {
@@ -678,21 +780,72 @@ function resolveChatEndpoint(baseUrl: string, isAnthropic: boolean): string {
 }
 
 /**
- * 解析 API 返回的模型列表为 FetchedModelInfo 数组
- * 兼容多种 API 响应格式：{data:[...]}, {models:[...]}, 纯数组
+ * 解析 API 返回的模型列表为 FetchedModelInfo 数组。
+ * 兼容中转站常见格式：{data:[...]}, {models:[...]}, {result:{models:[...]}}, {payload:{data:[...]}} 等。
  */
 function parseFetchedModels(payload: unknown): FetchedModelInfo[] {
-  const rawModels = Array.isArray(payload)
-    ? payload
-    : Array.isArray((payload as { data?: unknown[] })?.data)
-      ? (payload as { data: unknown[] }).data
-      : Array.isArray((payload as { models?: unknown[] })?.models)
-        ? (payload as { models: unknown[] }).models
-        : [];
+  const merged = new Map<string, FetchedModelInfo>();
+  for (const raw of collectModelCandidates(payload)) {
+    const model = parseFetchedModel(raw);
+    if (model?.id && !merged.has(model.id)) {
+      merged.set(model.id, model);
+    }
+  }
+  return Array.from(merged.values()).sort((a, b) => a.id.localeCompare(b.id));
+}
 
-  return rawModels
-    .map(parseFetchedModel)
-    .filter((model): model is FetchedModelInfo => !!model?.id);
+function collectModelCandidates(payload: unknown, depth = 0, inModelList = true): unknown[] {
+  if (depth > 8 || payload === undefined || payload === null) return [];
+
+  if (Array.isArray(payload)) {
+    const result: unknown[] = [];
+    for (const item of payload) {
+      if (inModelList || typeof item === "string" || isLikelyModelRecord(item)) {
+        result.push(item);
+      }
+      result.push(...collectModelCandidates(item, depth + 1, false));
+    }
+    return result;
+  }
+
+  if (typeof payload !== "object") {
+    return inModelList ? [payload] : [];
+  }
+
+  const record = payload as Record<string, unknown>;
+  const result: unknown[] = [];
+  if (isLikelyModelRecord(record)) {
+    result.push(record);
+  }
+
+  for (const [key, value] of Object.entries(record)) {
+    const normalizedKey = key.toLowerCase().replace(/[-_\s]/g, "");
+    const isModelContainer = [
+      "data",
+      "models",
+      "modellist",
+      "availablemodels",
+      "modeloptions",
+      "items",
+      "results",
+      "result",
+      "payload",
+      "response",
+    ].includes(normalizedKey);
+    if (isModelContainer || Array.isArray(value)) {
+      result.push(...collectModelCandidates(value, depth + 1, isModelContainer));
+    } else if (value && typeof value === "object" && depth < 4) {
+      result.push(...collectModelCandidates(value, depth + 1, false));
+    }
+  }
+
+  return result;
+}
+
+function isLikelyModelRecord(raw: unknown): raw is Record<string, unknown> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return false;
+  const record = raw as Record<string, unknown>;
+  return !!readString(record, ["id", "name", "model", "modelName", "model_name", "slug", "value", "label"]);
 }
 
 /** 解析单个 API 模型对象（可能是字符串或对象） */
@@ -705,7 +858,7 @@ function parseFetchedModel(raw: unknown): FetchedModelInfo | undefined {
   }
 
   const record = raw as Record<string, unknown>;
-  const id = readString(record, ["id", "name", "model"]);
+  const id = readString(record, ["id", "name", "model", "modelName", "model_name", "slug", "value", "label"]);
   if (!id) return undefined;
 
   return {
@@ -904,7 +1057,8 @@ async function handleConfigWebviewMessage(webview: vscode.Webview, message: any,
     }
     case "fetchModels": {
       try {
-        const fetched = await fetchAvailableModels(message.baseUrl, message.apiKey || "");
+        const providerConfig = resolveProviderFromMessage(message);
+        const fetched = await fetchAvailableModels(providerConfig);
         webview.postMessage({ type: "modelsFetched", models: fetched, providerId: message.providerId });
       } catch (err: any) {
         webview.postMessage({ type: "modelsFetchError", error: err.message, providerId: message.providerId });
@@ -916,7 +1070,8 @@ async function handleConfigWebviewMessage(webview: vscode.Webview, message: any,
         message.baseUrl,
         message.apiKey || "",
         message.modelName || "",
-        message.providerName || ""
+        message.providerName || "",
+        resolveProviderFromMessage(message)
       );
       webview.postMessage({
         type: "providerTestResult",
