@@ -11,9 +11,20 @@
  */
 
 import * as vscode from "vscode";
+import * as http from "node:http";
+import * as https from "node:https";
+import * as fs from "node:fs";
 import { AIModel, Provider, getVisibleModels, getProviders, getModels } from "./config.js";
 import { log } from "./logger.js";
 import { getReasoningEffortOptions, getThinkingTypeOptions, resolveModelRuntimeMetadata } from "./modelMetadata.js";
+
+type JsonHttpResponse = {
+  ok: boolean;
+  status: number;
+  contentType: string;
+  text(): Promise<string>;
+  chunks(): AsyncIterable<Uint8Array>;
+};
 
 export class CustomAIProvider {
   private context: vscode.ExtensionContext;
@@ -153,6 +164,9 @@ export class CustomAIProvider {
     const config = vscode.workspace.getConfiguration("customai");
     const temperature = config.get<number>("defaultTemperature", 0.7);
     const maxTokens = config.get<number>("defaultMaxTokens", 4096);
+    const streamMode = config.get<string>("streamMode", "auto");
+    const localEndpointHosts = config.get<string[]>("localEndpointHosts", []);
+    const localCompatibilityMode = config.get<string>("localCompatibilityMode", "auto");
 
     const body: Record<string, unknown> = {
       model: model.modelName,
@@ -177,10 +191,16 @@ export class CustomAIProvider {
     }
 
     const endpoint = this.resolveEndpoint(provider.baseUrl, isAnthropic);
+    const endpointCandidates = this.resolveEndpointCandidates(endpoint, localEndpointHosts);
+    this.ensureNoProxyForLocalEndpoints(endpointCandidates);
+    const localEndpoint = endpointCandidates.some((candidate) => this.isLocalEndpoint(candidate));
+    const streamDecision = this.resolveStreamDecision(endpoint, streamMode, body.stream);
+    body.stream = streamDecision.stream;
+    if (streamDecision.reason) log(streamDecision.reason);
 
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
-      "Accept": "text/event-stream, application/json",
+      "Accept": body.stream === false ? "application/json, text/plain" : "text/event-stream, application/json",
     };
 
     if (isAnthropic) {
@@ -196,120 +216,43 @@ export class CustomAIProvider {
       (body as Record<string, unknown>).max_tokens = maxTokens;
     }
 
+    const requestBody = localEndpoint && localCompatibilityMode === "minimal"
+      ? this.createLocalCompatibilityBody(body)
+      : body;
+    const requestHeaders = localEndpoint && localCompatibilityMode === "minimal"
+      ? this.createLocalCompatibilityHeaders(headers, requestBody)
+      : headers;
+    this.logRequestShape(endpoint, requestBody, localCompatibilityMode);
+
     progress.report(new vscode.LanguageModelTextPart(""));
 
     try {
-      const abortController = new AbortController();
-      const cancellation = token.onCancellationRequested(() => abortController.abort());
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(body),
-        signal: abortController.signal,
-      });
-      cancellation.dispose();
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`API Error (${response.status}): ${errorText}`);
-      }
-
-      if (!response.body) {
-        throw new Error("No response body");
-      }
-
-      const contentType = response.headers.get("content-type") || "";
-      if (!contentType.includes("text/event-stream")) {
-        const payload = await response.text();
-        const emitted = this.reportJsonResponse(payload, progress, isAnthropic);
-        if (!emitted) {
-          throw new Error(`API returned no text content: ${payload.slice(0, 500)}`);
-        }
-        return;
-      }
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      const toolCallAccumulators: Map<number, { id?: string; name?: string; arguments: string }> = new Map();
-      let emittedText = false;
-      const unknownChunkPreviews: string[] = [];
-
-      while (true) {
-        if (token.isCancellationRequested) {
-          break;
+      try {
+        await this.postJsonAndReportWithEndpointFallback(endpointCandidates, requestHeaders, requestBody, progress, isAnthropic, token);
+      } catch (error) {
+        if (
+          localEndpoint
+          && localCompatibilityMode !== "full"
+          && localCompatibilityMode !== "minimal"
+          && this.shouldRetryLocalCompatibility(error)
+          && !token.isCancellationRequested
+        ) {
+          log(`Local reverse proxy compatibility fallback after ${this.describeError(error)}`);
+          const fallbackBody = this.createLocalCompatibilityBody(body);
+          const fallbackHeaders = this.createLocalCompatibilityHeaders(headers, fallbackBody);
+          this.logRequestShape(endpoint, fallbackBody, "minimal-fallback");
+          await this.postJsonAndReportWithEndpointFallback(endpointCandidates, fallbackHeaders, fallbackBody, progress, isAnthropic, token);
+          return;
         }
 
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-
-        for (const line of lines) {
-          const trimmedLine = line.trim();
-          if (trimmedLine === "" || trimmedLine.startsWith(":") || trimmedLine.startsWith("event:")) continue;
-
-          const data = trimmedLine.startsWith("data:") ? trimmedLine.slice(5).trim() : trimmedLine;
-          if (data === "[DONE]") continue;
-
-          try {
-            const parsed = JSON.parse(data);
-            const text = this.extractResponseText(parsed, isAnthropic);
-            if (text) {
-              emittedText = true;
-              progress.report(new vscode.LanguageModelTextPart(text));
-            } else {
-              this.captureUnknownChunkPreview(unknownChunkPreviews, data);
-            }
-
-            if (isAnthropic) {
-              // Anthropic text_delta 已由 extractResponseText 处理
-            } else {
-              // OpenAI 兼容流式解析
-              const delta = parsed.choices?.[0]?.delta;
-              const finishReason = parsed.choices?.[0]?.finish_reason;
-
-              // 工具调用增量累积（流式 tool_calls 分片到达）
-              if (delta?.tool_calls) {
-                for (const tc of delta.tool_calls) {
-                  const existing = toolCallAccumulators.get(tc.index) || { arguments: "" };
-                  if (tc.id) { existing.id = tc.id; }
-                  if (tc.function?.name) { existing.name = tc.function.name; }
-                  if (tc.function?.arguments) { existing.arguments += tc.function.arguments; }
-                  toolCallAccumulators.set(tc.index, existing);
-                }
-              }
-
-              // 流结束时上报完整的工具调用
-              if (finishReason === "tool_calls") {
-                for (const [, tc] of toolCallAccumulators) {
-                  if (tc.name && tc.id) {
-                    try {
-                      const input = JSON.parse(tc.arguments || "{}");
-                      progress.report(new vscode.LanguageModelToolCallPart(tc.id, tc.name, input));
-                    } catch {
-                      progress.report(new vscode.LanguageModelToolCallPart(tc.id, tc.name, {}));
-                    }
-                  }
-                }
-              }
-            }
-          } catch {
-            this.captureUnknownChunkPreview(unknownChunkPreviews, data);
-          }
+        if (requestBody.stream !== false && streamMode !== "stream" && this.isRetryableTransportError(error) && !token.isCancellationRequested) {
+          log(`Stream transport failed (${this.describeError(error)}); using one-shot non-stream fallback`);
+          const fallbackBody = { ...requestBody, stream: false };
+          const fallbackHeaders = { ...requestHeaders, Accept: "application/json, text/plain" };
+          await this.postJsonAndReportWithEndpointFallback(endpointCandidates, fallbackHeaders, fallbackBody, progress, isAnthropic, token);
+          return;
         }
-      }
-      if (buffer.trim()) {
-        const flushed = this.reportJsonResponse(buffer.trim().replace(/^data:\s*/, ""), progress, isAnthropic);
-        emittedText = emittedText || flushed;
-      }
-      if (!emittedText) {
-        if (unknownChunkPreviews.length > 0) {
-          log(`No text emitted from stream. Sample chunks: ${unknownChunkPreviews.join(" | ")}`);
-        }
-        throw new Error("API response completed without text content; unsupported stream format. See the Custom AI output log, or set JSON参数 to {\"stream\":false} for this model.");
+        throw error;
       }
     } catch (error) {
       if ((error as Error).name === "AbortError") {
@@ -402,11 +345,397 @@ export class CustomAIProvider {
     return `${trimmed}/chat/completions`;
   }
 
+  private resolveEndpointCandidates(endpoint: string, configuredHosts: string[]): string[] {
+    const candidates = [endpoint];
+    if (!this.isLocalEndpoint(endpoint)) return candidates;
+
+    let url: URL;
+    try {
+      url = new URL(endpoint);
+    } catch {
+      return candidates;
+    }
+
+    const hosts = this.getLocalEndpointHostCandidates(url.hostname, configuredHosts);
+    for (const host of hosts) {
+      try {
+        const candidate = new URL(endpoint);
+        candidate.hostname = host;
+        const candidateUrl = candidate.toString();
+        if (!candidates.includes(candidateUrl)) {
+          candidates.push(candidateUrl);
+        }
+      } catch {
+        // Ignore invalid configured host overrides.
+      }
+    }
+
+    if (candidates.length > 1) {
+      log(`Local endpoint candidates: ${candidates.join(", ")}`);
+    }
+    return candidates;
+  }
+
+  private getLocalEndpointHostCandidates(currentHost: string, configuredHosts: string[]): string[] {
+    const current = this.normalizeHostname(currentHost);
+    const hosts: string[] = [];
+    const addHost = (host: string | undefined): void => {
+      const normalized = this.normalizeHostname(host || "");
+      if (!normalized || normalized === current || hosts.includes(normalized)) return;
+      hosts.push(normalized);
+    };
+
+    for (const host of configuredHosts || []) addHost(host);
+    addHost("localhost");
+    addHost("127.0.0.1");
+
+    if (this.isWslEnvironment()) {
+      for (const host of this.readWslHostCandidates()) addHost(host);
+      addHost("host.docker.internal");
+    }
+
+    return hosts;
+  }
+
+  private ensureNoProxyForLocalEndpoints(endpoints: string[]): void {
+    const hasLocalEndpoint = endpoints.some((endpoint) => this.isLocalEndpoint(endpoint));
+    if (!hasLocalEndpoint) return;
+
+    const hosts = new Set<string>(["localhost", "127.0.0.1", "::1"]);
+    for (const endpoint of endpoints) {
+      try {
+        const hostname = this.normalizeHostname(new URL(endpoint).hostname);
+        if (hostname) hosts.add(hostname);
+      } catch {
+        // Ignore invalid endpoint candidates.
+      }
+    }
+    this.mergeNoProxyHosts([...hosts]);
+  }
+
+  private mergeNoProxyHosts(hosts: string[]): void {
+    const current = `${process.env.NO_PROXY || ""},${process.env.no_proxy || ""}`;
+    const values = current
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean);
+    const normalized = new Set(values.map((value) => this.normalizeHostname(value)));
+    let changed = false;
+
+    for (const host of hosts) {
+      const normalizedHost = this.normalizeHostname(host);
+      if (!normalizedHost || normalized.has(normalizedHost)) continue;
+      values.push(host);
+      normalized.add(normalizedHost);
+      changed = true;
+    }
+
+    if (changed) {
+      const next = values.join(",");
+      process.env.NO_PROXY = next;
+      process.env.no_proxy = next;
+      log(`NO_PROXY updated for local endpoints: ${hosts.join(", ")}`);
+    }
+  }
+
+  private readWslHostCandidates(): string[] {
+    const hosts: string[] = [];
+    const add = (value: string | undefined): void => {
+      const host = (value || "").trim();
+      if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(host) && !hosts.includes(host)) hosts.push(host);
+    };
+
+    add(process.env.CUSTOMAI_LOCAL_HOST);
+    add(process.env.WSL_HOST_IP);
+
+    try {
+      const resolvConf = fs.readFileSync("/etc/resolv.conf", "utf8");
+      for (const match of resolvConf.matchAll(/^\s*nameserver\s+([^\s#]+)/gm)) {
+        add(match[1]);
+      }
+    } catch {
+      // Not running on WSL/Linux or resolv.conf is unavailable.
+    }
+
+    return hosts;
+  }
+
+  private isWslEnvironment(): boolean {
+    if (process.env.WSL_DISTRO_NAME || process.env.WSL_INTEROP) return true;
+    try {
+      return fs.readFileSync("/proc/version", "utf8").toLowerCase().includes("microsoft");
+    } catch {
+      return false;
+    }
+  }
+
+  private normalizeHostname(hostname: string): string {
+    return hostname.trim().toLowerCase().replace(/^\[/, "").replace(/\]$/, "");
+  }
+
+  private isLocalHostname(hostname: string): boolean {
+    const normalized = this.normalizeHostname(hostname);
+    return normalized === "localhost"
+      || normalized === "127.0.0.1"
+      || normalized === "::1"
+      || normalized === "host.docker.internal"
+      || normalized.endsWith(".local")
+      || this.isPrivateIpv4(normalized);
+  }
+
+  private isPrivateIpv4(hostname: string): boolean {
+    const parts = hostname.split(".").map((part) => Number(part));
+    if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+      return false;
+    }
+    const [first, second] = parts;
+    return first === 10
+      || (first === 172 && second >= 16 && second <= 31)
+      || (first === 192 && second === 168)
+      || (first === 169 && second === 254);
+  }
+
+  private resolveStreamDecision(
+    endpoint: string,
+    streamMode: string,
+    requestedStream: unknown
+  ): { stream: boolean; reason?: string } {
+    const normalizedMode = streamMode === "stream" || streamMode === "non-stream" ? streamMode : "auto";
+    if (normalizedMode === "stream") {
+      return { stream: true, reason: `Stream mode forced by setting for endpoint: ${endpoint}` };
+    }
+    if (normalizedMode === "non-stream") {
+      return { stream: false, reason: `Non-stream mode forced by setting for endpoint: ${endpoint}` };
+    }
+    if (requestedStream === false) {
+      return { stream: false, reason: `Model JSON parameters disabled streaming for endpoint: ${endpoint}` };
+    }
+    if (this.isLocalEndpoint(endpoint)) {
+      return { stream: false, reason: `Local endpoint detected; using non-stream direct HTTP compatibility mode: ${endpoint}` };
+    }
+    return { stream: true };
+  }
+
+  private createLocalCompatibilityBody(body: Record<string, unknown>): Record<string, unknown> {
+    const compatible: Record<string, unknown> = {
+      model: body.model,
+      messages: this.normalizeMessagesForLocalCompatibility(body.messages),
+      stream: false,
+    };
+
+    if (typeof body.temperature === "number") {
+      compatible.temperature = body.temperature;
+    }
+    if (typeof body.max_tokens === "number") {
+      compatible.max_tokens = body.max_tokens;
+    }
+
+    return compatible;
+  }
+
+  private normalizeMessagesForLocalCompatibility(value: unknown): unknown[] {
+    if (!Array.isArray(value)) return [];
+
+    return value.map((message) => {
+      if (!message || typeof message !== "object") return message;
+      const record = message as Record<string, unknown>;
+      const role = typeof record.role === "string" ? record.role : "user";
+      const content = this.extractTextValue(record.content) || "";
+
+      if (role === "tool") {
+        const toolId = typeof record.tool_call_id === "string" ? record.tool_call_id : "tool";
+        return {
+          role: "user",
+          content: `Tool result (${toolId}): ${content}`,
+        };
+      }
+
+      if (role === "assistant" && record.tool_calls) {
+        return {
+          role: "assistant",
+          content,
+        };
+      }
+
+      return {
+        role,
+        content,
+      };
+    });
+  }
+
+  private createLocalCompatibilityHeaders(
+    headers: Record<string, string>,
+    body: Record<string, unknown>
+  ): Record<string, string> {
+    const compatible: Record<string, string> = {
+      "Content-Type": "application/json",
+      "Accept": body.stream === false ? "application/json" : "text/event-stream, application/json",
+      "User-Agent": "CustomCopilotChat/1.1",
+      "Accept-Encoding": "identity",
+      "Connection": "close",
+    };
+
+    for (const [key, value] of Object.entries(headers)) {
+      const normalized = key.toLowerCase();
+      if (normalized === "content-type" || normalized === "accept") continue;
+      compatible[key] = value;
+    }
+
+    return compatible;
+  }
+
+  private shouldRetryLocalCompatibility(error: unknown): boolean {
+    if (this.isRetryableTransportError(error)) return true;
+    const message = this.describeError(error).toLowerCase();
+    return [
+      "api error (400)",
+      "api error (408)",
+      "api error (409)",
+      "api error (422)",
+      "api error (500)",
+      "api error (502)",
+      "api error (503)",
+      "api error (504)",
+      "api returned no text content",
+      "unsupported stream format",
+    ].some((value) => message.includes(value));
+  }
+
+  private logRequestShape(endpoint: string, body: Record<string, unknown>, compatibilityMode: string): void {
+    const toolCount = Array.isArray(body.tools) ? body.tools.length : 0;
+    const hasReasoning = Object.keys(body).some((key) => key.toLowerCase().includes("reasoning") || key === "thinking");
+    log(`Request shape endpoint=${endpoint}, stream=${String(body.stream)}, tools=${toolCount}, reasoning=${hasReasoning}, compatibility=${compatibilityMode}`);
+  }
+
+  private async postJsonAndReport(
+    endpoint: string,
+    headers: Record<string, string>,
+    body: Record<string, unknown>,
+    progress: vscode.Progress<vscode.LanguageModelResponsePart>,
+    isAnthropic: boolean,
+    token: vscode.CancellationToken
+  ): Promise<void> {
+    const response = await this.postJson(endpoint, headers, body, token);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`API Error (${response.status}): ${errorText}`);
+    }
+
+    const contentType = response.contentType;
+    if (!contentType.includes("text/event-stream")) {
+      const payload = await response.text();
+      const emitted = this.reportJsonResponse(payload, progress, isAnthropic);
+      if (!emitted) {
+        throw new Error(`API returned no text content: ${payload.slice(0, 500)}`);
+      }
+      return;
+    }
+
+    const decoder = new TextDecoder();
+    let buffer = "";
+    const toolCallAccumulators: Map<number, { id?: string; name?: string; arguments: string }> = new Map();
+    let emittedText = false;
+    const unknownChunkPreviews: string[] = [];
+    const eventDataLines: string[] = [];
+    const flushEventData = (): void => {
+      if (eventDataLines.length === 0) return;
+      const data = eventDataLines.join("\n").trim();
+      eventDataLines.length = 0;
+      if (this.reportStreamChunk(data, progress, isAnthropic, toolCallAccumulators, unknownChunkPreviews)) {
+        emittedText = true;
+      }
+    };
+
+    for await (const value of response.chunks()) {
+      if (token.isCancellationRequested) {
+        break;
+      }
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+
+      for (const line of lines) {
+        const trimmedLine = line.trim();
+        if (trimmedLine === "") {
+          flushEventData();
+          continue;
+        }
+        if (trimmedLine.startsWith(":") || trimmedLine.startsWith("event:")) continue;
+
+        if (trimmedLine.startsWith("data:")) {
+          eventDataLines.push(trimmedLine.slice(5).trimStart());
+        } else {
+          flushEventData();
+          if (this.reportStreamChunk(trimmedLine, progress, isAnthropic, toolCallAccumulators, unknownChunkPreviews)) {
+            emittedText = true;
+          }
+        }
+      }
+    }
+    if (buffer.trim()) {
+      const trimmedBuffer = buffer.trim();
+      eventDataLines.push(trimmedBuffer.startsWith("data:") ? trimmedBuffer.slice(5).trimStart() : trimmedBuffer);
+    }
+    flushEventData();
+    if (!emittedText && unknownChunkPreviews.length > 0) {
+      log(`No text emitted from stream. Sample chunks: ${unknownChunkPreviews.join(" | ")}`);
+    }
+    if (!emittedText) {
+      const sample = unknownChunkPreviews.length > 0
+        ? ` Sample chunks: ${unknownChunkPreviews.join(" | ")}`
+        : "";
+      throw new Error(`API response completed without text content; unsupported stream format. See the Custom AI output log.${sample}`);
+    }
+  }
+
+  private async postJsonAndReportWithEndpointFallback(
+    endpoints: string[],
+    headers: Record<string, string>,
+    body: Record<string, unknown>,
+    progress: vscode.Progress<vscode.LanguageModelResponsePart>,
+    isAnthropic: boolean,
+    token: vscode.CancellationToken
+  ): Promise<void> {
+    let lastError: unknown;
+    for (let index = 0; index < endpoints.length; index++) {
+      const endpoint = endpoints[index];
+      try {
+        if (index > 0) {
+          log(`Trying local endpoint candidate ${index + 1}/${endpoints.length}: ${endpoint}`);
+        }
+        await this.postJsonAndReport(endpoint, headers, body, progress, isAnthropic, token);
+        return;
+      } catch (error) {
+        lastError = error;
+        const canTryNext = index < endpoints.length - 1
+          && this.isRetryableTransportError(error)
+          && !token.isCancellationRequested;
+        if (!canTryNext) throw error;
+        log(`Local endpoint candidate failed (${this.describeError(error)}); trying next candidate`);
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  }
+
   private reportJsonResponse(
     payload: string,
     progress: vscode.Progress<vscode.LanguageModelResponsePart>,
     isAnthropic: boolean
   ): boolean {
+    const trimmedPayload = payload.trim();
+    if (trimmedPayload) {
+      try {
+        const parsed = JSON.parse(trimmedPayload);
+        return this.reportParsedJsonResponse(parsed, progress, isAnthropic);
+      } catch (error) {
+        if (!(error instanceof SyntaxError)) throw error;
+        // Fall back to line-oriented parsing below.
+      }
+    }
+
     const chunks = payload
       .split(/\r?\n/)
       .map((line) => line.trim())
@@ -427,24 +756,438 @@ export class CustomAIProvider {
         }
         continue;
       }
-      if (parsed?.error) {
-        const message = parsed.error.message || JSON.stringify(parsed.error);
-        throw new Error(`API Error: ${message}`);
-      }
-      const text = this.extractResponseText(parsed, isAnthropic);
-      if (text) {
-        progress.report(new vscode.LanguageModelTextPart(text));
-        emitted = true;
-      }
+      if (this.reportParsedJsonResponse(parsed, progress, isAnthropic)) emitted = true;
     }
     return emitted;
   }
 
+  private reportParsedJsonResponse(
+    parsed: unknown,
+    progress: vscode.Progress<vscode.LanguageModelResponsePart>,
+    isAnthropic: boolean
+  ): boolean {
+    this.throwIfApiError(parsed);
+
+    let emitted = false;
+    const text = this.extractResponseText(parsed, isAnthropic);
+    if (text) {
+      progress.report(new vscode.LanguageModelTextPart(text));
+      emitted = true;
+    }
+
+    if (this.reportJsonToolCalls(parsed, progress)) {
+      emitted = true;
+    }
+
+    return emitted;
+  }
+
+  private reportJsonToolCalls(
+    parsed: unknown,
+    progress: vscode.Progress<vscode.LanguageModelResponsePart>
+  ): boolean {
+    const seen = new Set<string>();
+    let emitted = false;
+    let fallbackIndex = 0;
+
+    const emitToolCall = (value: unknown): void => {
+      if (!value || typeof value !== "object") return;
+      const toolCall = this.toToolCallSpec(value as Record<string, unknown>, fallbackIndex++);
+      if (!toolCall) return;
+      const key = `${toolCall.id}:${toolCall.name}:${this.safeJsonPreview(toolCall.input)}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      progress.report(new vscode.LanguageModelToolCallPart(toolCall.id, toolCall.name, toolCall.input));
+      emitted = true;
+    };
+
+    const visit = (value: unknown, depth = 0): void => {
+      if (!value || depth > 8) return;
+      if (Array.isArray(value)) {
+        for (const item of value) visit(item, depth + 1);
+        return;
+      }
+      if (typeof value !== "object") return;
+
+      const record = value as Record<string, unknown>;
+      const directToolCalls = this.asArray(record.tool_calls) || this.asArray(record.toolCalls);
+      if (directToolCalls) {
+        for (const toolCall of directToolCalls) emitToolCall(toolCall);
+      }
+
+      if (this.isToolCallLikeObject(record)) {
+        emitToolCall(record);
+      }
+
+      for (const field of [
+        "choices",
+        "message",
+        "delta",
+        "output",
+        "content",
+        "data",
+        "response",
+        "result",
+        "item",
+        "items",
+      ]) {
+        visit(record[field], depth + 1);
+      }
+    };
+
+    visit(parsed);
+    return emitted;
+  }
+
+  private toToolCallSpec(
+    record: Record<string, unknown>,
+    fallbackIndex: number
+  ): { id: string; name: string; input: Record<string, unknown> } | undefined {
+    const fn = record.function && typeof record.function === "object"
+      ? record.function as Record<string, unknown>
+      : undefined;
+
+    const name = this.firstString(fn?.name, record.name, record.tool_name, record.toolName);
+    if (!name) return undefined;
+
+    const id = this.firstString(record.id, record.call_id, record.callId, record.tool_call_id, record.toolCallId)
+      || `tool_call_${fallbackIndex + 1}`;
+    const rawInput = fn?.arguments
+      ?? record.arguments
+      ?? record.input
+      ?? record.args
+      ?? record.parameters
+      ?? {};
+
+    return {
+      id,
+      name,
+      input: this.parseToolCallInput(rawInput),
+    };
+  }
+
+  private isToolCallLikeObject(record: Record<string, unknown>): boolean {
+    const type = typeof record.type === "string" ? record.type.toLowerCase() : "";
+    if (type === "function_call" || type === "tool_use" || type === "tool_call") return true;
+    if (record.function && typeof record.function === "object") {
+      const fn = record.function as Record<string, unknown>;
+      return typeof fn.name === "string";
+    }
+    return !!this.firstString(record.name, record.tool_name, record.toolName)
+      && (record.arguments !== undefined || record.input !== undefined || record.args !== undefined);
+  }
+
+  private parseToolCallInput(value: unknown): Record<string, unknown> {
+    if (value === undefined || value === null || value === "") return {};
+    if (typeof value === "string") {
+      try {
+        const parsed = JSON.parse(value);
+        return this.parseToolCallInput(parsed);
+      } catch {
+        return { input: value };
+      }
+    }
+    if (Array.isArray(value)) return { value };
+    if (typeof value === "object") return value as Record<string, unknown>;
+    return { value };
+  }
+
+  private asArray(value: unknown): unknown[] | undefined {
+    return Array.isArray(value) ? value : undefined;
+  }
+
+  private firstString(...values: unknown[]): string {
+    for (const value of values) {
+      if (typeof value === "string" && value.trim()) return value.trim();
+    }
+    return "";
+  }
+
+  private async postJson(
+    endpoint: string,
+    headers: Record<string, string>,
+    body: Record<string, unknown>,
+    token: vscode.CancellationToken
+  ): Promise<JsonHttpResponse> {
+    const payload = JSON.stringify(body);
+
+    if (this.isLocalEndpoint(endpoint)) {
+      log(`Local endpoint detected; using direct HTTP transport: ${endpoint}`);
+      return await this.postJsonDirect(endpoint, headers, payload, token);
+    }
+
+    try {
+      const abortController = new AbortController();
+      const cancellation = token.onCancellationRequested(() => abortController.abort());
+      try {
+        const response = await fetch(endpoint, {
+          method: "POST",
+          headers,
+          body: payload,
+          signal: abortController.signal,
+        });
+        return this.wrapFetchResponse(response);
+      } finally {
+        cancellation.dispose();
+      }
+    } catch (error) {
+      if ((error as Error).name === "AbortError") {
+        throw error;
+      }
+      if (this.isRetryableTransportError(error)) {
+        log(`Fetch transport failed (${this.describeError(error)}); using direct HTTP transport once: ${endpoint}`);
+        return await this.postJsonDirect(endpoint, headers, payload, token);
+      }
+      throw error;
+    }
+  }
+
+  private wrapFetchResponse(response: Response): JsonHttpResponse {
+    return {
+      ok: response.ok,
+      status: response.status,
+      contentType: response.headers.get("content-type") || "",
+      text: () => response.text(),
+      chunks: async function* () {
+        if (!response.body) return;
+        const reader = response.body.getReader();
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          yield value;
+        }
+      },
+    };
+  }
+
+  private postJsonDirect(
+    endpoint: string,
+    headers: Record<string, string>,
+    payload: string,
+    token: vscode.CancellationToken
+  ): Promise<JsonHttpResponse> {
+    return new Promise((resolve, reject) => {
+      let url: URL;
+      try {
+        url = new URL(endpoint);
+      } catch (error) {
+        reject(error);
+        return;
+      }
+
+      const transport = url.protocol === "https:" ? https : http;
+      const requestHeaders = {
+        "User-Agent": "CustomCopilotChat/1.1",
+        "Accept-Encoding": "identity",
+        "Connection": "close",
+        ...headers,
+        "Content-Length": Buffer.byteLength(payload).toString(),
+      };
+
+      let cancellation: vscode.Disposable | undefined;
+      const req = transport.request(url, {
+        method: "POST",
+        agent: false,
+        headers: requestHeaders,
+      }, (res) => {
+        const status = res.statusCode || 0;
+        const contentTypeHeader = res.headers["content-type"];
+        const contentType = Array.isArray(contentTypeHeader)
+          ? contentTypeHeader.join("; ")
+          : contentTypeHeader || "";
+        const disposeCancellation = () => {
+          cancellation?.dispose();
+          cancellation = undefined;
+        };
+
+        resolve({
+          ok: status >= 200 && status < 300,
+          status,
+          contentType,
+          text: async () => {
+            const chunks: Buffer[] = [];
+            try {
+              for await (const chunk of res) {
+                chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+              }
+              return Buffer.concat(chunks).toString("utf8");
+            } finally {
+              disposeCancellation();
+            }
+          },
+          chunks: async function* () {
+            try {
+              for await (const chunk of res) {
+                yield Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+              }
+            } finally {
+              disposeCancellation();
+            }
+          },
+        });
+      });
+
+      cancellation = token.onCancellationRequested(() => {
+        const error = new Error("AbortError");
+        error.name = "AbortError";
+        req.destroy(error);
+      });
+
+      req.setTimeout(300000, () => {
+        const error = new Error("Request timed out after 300s");
+        error.name = "TimeoutError";
+        req.destroy(error);
+      });
+
+      req.on("error", (error) => {
+        cancellation?.dispose();
+        reject(error);
+      });
+      req.end(payload);
+    });
+  }
+
+  private shouldRetryWithDirectHttp(endpoint: string, status: number): boolean {
+    return this.isLocalEndpoint(endpoint) && (status === 502 || status === 503 || status === 504);
+  }
+
+  private isRetryableTransportError(error: unknown): boolean {
+    const messages = this.collectErrorChain(error)
+      .map((item) => item.message.toLowerCase())
+      .join(" ");
+    const codes = this.collectErrorChain(error)
+      .map((item) => item.code.toLowerCase())
+      .filter(Boolean);
+    return [
+      "socket hang up",
+      "fetch failed",
+      "econnreset",
+      "econnrefused",
+      "etimedout",
+      "ehostunreach",
+      "enetworkdown",
+      "enotfound",
+      "socket closed",
+      "premature close",
+      "aborted",
+      "terminated",
+      "connection closed",
+      "und_err_socket",
+    ].some((value) => messages.includes(value) || codes.includes(value));
+  }
+
+  private describeError(error: unknown): string {
+    return this.collectErrorChain(error)
+      .map((item) => item.code ? `${item.message} (${item.code})` : item.message)
+      .filter(Boolean)
+      .join("; ") || String(error);
+  }
+
+  private collectErrorChain(error: unknown): Array<{ message: string; code: string }> {
+    const result: Array<{ message: string; code: string }> = [];
+    let current: unknown = error;
+    const seen = new Set<unknown>();
+    while (current && !seen.has(current)) {
+      seen.add(current);
+      if (current instanceof Error) {
+        const err = current as NodeJS.ErrnoException & { cause?: unknown };
+        result.push({
+          message: err.message || err.name || "",
+          code: typeof err.code === "string" ? err.code : "",
+        });
+        current = err.cause;
+        continue;
+      }
+      if (typeof current === "object") {
+        const record = current as Record<string, unknown>;
+        result.push({
+          message: typeof record.message === "string" ? record.message : "",
+          code: typeof record.code === "string" ? record.code : "",
+        });
+        current = record.cause;
+        continue;
+      }
+      result.push({ message: String(current), code: "" });
+      break;
+    }
+    return result;
+  }
+
+  private isLocalEndpoint(endpoint: string): boolean {
+    try {
+      return this.isLocalHostname(new URL(endpoint).hostname);
+    } catch {
+      return false;
+    }
+  }
+
+  private reportStreamChunk(
+    data: string,
+    progress: vscode.Progress<vscode.LanguageModelResponsePart>,
+    isAnthropic: boolean,
+    toolCallAccumulators: Map<number, { id?: string; name?: string; arguments: string }>,
+    unknownChunkPreviews: string[]
+  ): boolean {
+    const trimmed = data.trim();
+    if (!trimmed || trimmed === "[DONE]") return false;
+
+    let parsed: any;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      if (this.isPlainTextStreamChunk(trimmed)) {
+        progress.report(new vscode.LanguageModelTextPart(trimmed));
+        return true;
+      }
+      this.captureUnknownChunkPreview(unknownChunkPreviews, trimmed);
+      return false;
+    }
+
+    this.throwIfApiError(parsed);
+    const text = this.extractResponseText(parsed, isAnthropic);
+    if (text) {
+      progress.report(new vscode.LanguageModelTextPart(text));
+    } else {
+      this.captureUnknownChunkPreview(unknownChunkPreviews, trimmed);
+    }
+
+    if (!isAnthropic) {
+      const delta = parsed.choices?.[0]?.delta;
+      const finishReason = parsed.choices?.[0]?.finish_reason;
+
+      if (delta?.tool_calls) {
+        for (const tc of delta.tool_calls) {
+          const existing = toolCallAccumulators.get(tc.index) || { arguments: "" };
+          if (tc.id) { existing.id = tc.id; }
+          if (tc.function?.name) { existing.name = tc.function.name; }
+          if (tc.function?.arguments) { existing.arguments += tc.function.arguments; }
+          toolCallAccumulators.set(tc.index, existing);
+        }
+      }
+
+      if (finishReason === "tool_calls") {
+        for (const [, tc] of toolCallAccumulators) {
+          if (tc.name && tc.id) {
+            try {
+              const input = JSON.parse(tc.arguments || "{}");
+              progress.report(new vscode.LanguageModelToolCallPart(tc.id, tc.name, input));
+            } catch {
+              progress.report(new vscode.LanguageModelToolCallPart(tc.id, tc.name, {}));
+            }
+          }
+        }
+      }
+    }
+
+    return !!text;
+  }
+
   private extractResponseText(parsed: any, isAnthropic: boolean): string {
     if (!parsed) return "";
-    if (parsed.error) {
-      throw new Error(parsed.error.message || JSON.stringify(parsed.error));
+    if (Array.isArray(parsed)) {
+      return parsed.map((item) => this.extractResponseText(item, isAnthropic)).join("");
     }
+    this.throwIfApiError(parsed);
 
     const parts: string[] = [];
     const add = (value: unknown): void => {
@@ -457,6 +1200,15 @@ export class CustomAIProvider {
     if (typeof parsed.response === "string") return parsed.response;
     if (typeof parsed.delta === "string") return parsed.delta;
     if (typeof parsed.content === "string") return parsed.content;
+    if (typeof parsed.message === "string") return parsed.message;
+    if (typeof parsed.msg === "string") return parsed.msg;
+    if (typeof parsed.reply === "string") return parsed.reply;
+    if (typeof parsed.answer === "string") return parsed.answer;
+    if (typeof parsed.completion === "string") return parsed.completion;
+    if (typeof parsed.generated_text === "string") return parsed.generated_text;
+    if (typeof parsed.output === "string") return parsed.output;
+    if (typeof parsed.data === "string") return parsed.data;
+    if (typeof parsed.value === "string" && this.isTextLikeObject(parsed)) return parsed.value;
 
     if (parsed.data && typeof parsed.data === "object") {
       add(this.extractResponseText(parsed.data, isAnthropic));
@@ -466,11 +1218,34 @@ export class CustomAIProvider {
       add(this.extractResponseText(parsed.response, isAnthropic));
     }
 
+    add(parsed.item);
+    add(parsed.message);
+    add(parsed.msg);
+    add(parsed.result);
+    add(parsed.reply);
+    add(parsed.answer);
+    add(parsed.completion);
+    add(parsed.generated_text);
+    add(parsed.value);
+    add(parsed.part);
+    add(parsed.parts);
+    add(parsed.detail);
+    add(parsed.description);
+
     if (Array.isArray(parsed.output)) {
       add(parsed.output
-        .flatMap((item: any) => Array.isArray(item.content) ? item.content : [])
+        .flatMap((item: any) => Array.isArray(item.content) ? item.content : [item])
         .map((content: any) => this.extractTextValue(content))
         .join(""));
+    }
+
+    add(parsed.output?.content);
+    add(parsed.output?.text);
+    add(parsed.output?.parts);
+    add(parsed.output?.value);
+
+    if (Array.isArray(parsed.candidates)) {
+      add(parsed.candidates[0]?.content?.parts);
     }
 
     if (isAnthropic) {
@@ -486,21 +1261,38 @@ export class CustomAIProvider {
     add(parsed.delta?.reasoning_content);
     add(parsed.delta?.reasoning);
     add(parsed.delta?.thinking);
+    add(parsed.delta?.value);
+    add(parsed.delta?.parts);
+    add(parsed.delta?.part);
     add(parsed.content);
 
-    const choice = parsed.choices?.[0];
-    add(choice?.delta?.content);
-    add(choice?.delta?.text);
-    add(choice?.delta?.output_text);
-    add(choice?.delta?.reasoning_content);
-    add(choice?.delta?.reasoning);
-    add(choice?.delta?.thinking);
-    if (choice?.message?.content) {
-      add(choice.message.content);
+    if (Array.isArray(parsed.choices)) {
+      for (const choice of parsed.choices) {
+        add(choice?.delta?.content);
+        add(choice?.delta?.text);
+        add(choice?.delta?.output_text);
+        add(choice?.delta?.reasoning_content);
+        add(choice?.delta?.reasoning);
+        add(choice?.delta?.thinking);
+        add(choice?.delta?.value);
+        add(choice?.delta?.parts);
+        add(choice?.delta?.message);
+        if (choice?.message?.content) {
+          add(choice.message.content);
+        }
+        add(choice?.message?.parts);
+        add(choice?.message?.text);
+        add(choice?.message?.reasoning_content);
+        add(choice?.message?.reasoning);
+        add(choice?.message?.msg);
+        add(choice?.text);
+        add(choice?.content);
+      }
     }
-    add(choice?.message?.reasoning_content);
-    add(choice?.message?.reasoning);
-    add(choice?.text);
+
+    if (parts.length === 0) {
+      add(this.extractDeepText(parsed));
+    }
 
     return parts.join("");
   }
@@ -519,16 +1311,220 @@ export class CustomAIProvider {
       "output_text",
       "content",
       "delta",
+      "msg",
+      "reply",
+      "part",
+      "parts",
+      "value",
+      "output",
+      "generated_text",
+      "message",
+      "message_text",
+      "messageText",
+      "response",
+      "result",
+      "answer",
+      "answer_text",
+      "answerText",
       "reasoning_content",
       "reasoning",
       "thinking",
       "partial_json",
+      "detail",
+      "description",
     ];
     for (const field of fields) {
       const text = this.extractTextValue(record[field]);
       if (text) return text;
     }
     return "";
+  }
+
+  private extractDeepText(value: unknown, depth = 0): string {
+    if (!value || depth > 8) return "";
+    if (typeof value === "string") return "";
+    if (Array.isArray(value)) {
+      return value.map((item) => this.extractDeepText(item, depth + 1)).join("");
+    }
+    if (typeof value !== "object") return "";
+
+    const record = value as Record<string, unknown>;
+    const fragments: string[] = [];
+    for (const [key, child] of Object.entries(record)) {
+      if (typeof child === "string") {
+        if (this.isLikelyTextField(key, record) && child) fragments.push(child);
+        continue;
+      }
+      const nested = this.extractDeepText(child, depth + 1);
+      if (nested) fragments.push(nested);
+    }
+    return fragments.join("");
+  }
+
+  private isLikelyTextField(key: string, record: Record<string, unknown>): boolean {
+    const normalized = key.toLowerCase();
+    if ([
+      "text",
+      "content",
+      "delta",
+      "output_text",
+      "reasoning_content",
+      "reasoning",
+      "thinking",
+      "answer",
+      "completion",
+      "generated_text",
+      "value",
+      "msg",
+      "reply",
+      "output",
+      "message_text",
+      "answer_text",
+      "detail",
+      "description",
+    ].includes(normalized)) {
+      return true;
+    }
+    if (normalized === "name" || normalized === "id" || normalized === "model" || normalized === "role") {
+      return false;
+    }
+    const type = typeof record.type === "string" ? record.type.toLowerCase() : "";
+    return type.includes("text") && (normalized === "value" || normalized === "content");
+  }
+
+  private isTextLikeObject(record: Record<string, unknown>): boolean {
+    const type = typeof record.type === "string" ? record.type.toLowerCase() : "";
+    return type.includes("text") || type.includes("message") || type.includes("content");
+  }
+
+  private throwIfApiError(parsed: unknown): void {
+    const message = this.extractApiErrorMessage(parsed);
+    if (message) {
+      throw new Error(`API Error: ${message}`);
+    }
+  }
+
+  private extractApiErrorMessage(value: unknown): string {
+    if (!value || typeof value !== "object") return "";
+    if (Array.isArray(value)) {
+      return value.map((item) => this.extractApiErrorMessage(item)).find(Boolean) || "";
+    }
+
+    const record = value as Record<string, unknown>;
+    const directError = record.error;
+    if (directError) {
+      if (typeof directError === "string") return directError;
+      if (typeof directError === "object") {
+        const errorRecord = directError as Record<string, unknown>;
+        const message = this.extractFirstText(errorRecord, [
+          "message",
+          "msg",
+          "detail",
+          "error_description",
+          "errorMessage",
+          "error_message",
+          "reason",
+          "description",
+          "type",
+        ]);
+        return message || this.safeJsonPreview(directError);
+      }
+    }
+
+    const objectType = typeof record.object === "string" ? record.object.toLowerCase() : "";
+    const eventType = typeof record.type === "string" ? record.type.toLowerCase() : "";
+    if (objectType === "error" || eventType === "error" || eventType.endsWith(".error")) {
+      return this.extractFirstText(record, [
+        "message",
+        "msg",
+        "detail",
+        "error_description",
+        "errorMessage",
+        "error_message",
+        "reason",
+        "description",
+      ]) || this.safeJsonPreview(record);
+    }
+
+    const statusCode = this.readNumericField(record, ["status", "status_code", "statusCode"]);
+    if (statusCode >= 400) {
+      const message = this.extractFirstText(record, [
+        "message",
+        "msg",
+        "detail",
+        "error_description",
+        "errorMessage",
+        "error_message",
+        "reason",
+        "description",
+      ]);
+      return message ? `${statusCode}: ${message}` : this.safeJsonPreview(record);
+    }
+
+    if (record.success === false || record.ok === false) {
+      return this.extractFirstText(record, [
+        "message",
+        "msg",
+        "detail",
+        "error_description",
+        "errorMessage",
+        "error_message",
+        "reason",
+        "description",
+      ]) || this.safeJsonPreview(record);
+    }
+
+    const code = this.readNumericField(record, ["code", "errcode", "error_code", "retcode"]);
+    if (Number.isFinite(code) && code !== 0 && (code < 200 || code >= 400)) {
+      const message = this.extractFirstText(record, [
+        "message",
+        "msg",
+        "detail",
+        "error_description",
+        "errorMessage",
+        "error_message",
+        "reason",
+        "description",
+      ]);
+      if (message) return `${code}: ${message}`;
+    }
+
+    return "";
+  }
+
+  private extractFirstText(record: Record<string, unknown>, fields: string[]): string {
+    for (const field of fields) {
+      const text = this.extractTextValue(record[field]);
+      if (text) return text;
+    }
+    return "";
+  }
+
+  private readNumericField(record: Record<string, unknown>, fields: string[]): number {
+    for (const field of fields) {
+      const value = record[field];
+      if (typeof value === "number") return value;
+      if (typeof value === "string" && value.trim() !== "") {
+        const parsed = Number(value);
+        if (Number.isFinite(parsed)) return parsed;
+      }
+    }
+    return 0;
+  }
+
+  private safeJsonPreview(value: unknown): string {
+    try {
+      return JSON.stringify(value).slice(0, 300);
+    } catch {
+      return String(value).slice(0, 300);
+    }
+  }
+
+  private isPlainTextStreamChunk(chunk: string): boolean {
+    if (!chunk || chunk === "[DONE]") return false;
+    if (chunk.startsWith("{") || chunk.startsWith("[") || chunk.startsWith(":")) return false;
+    if (/^[a-z_]+\s*:/i.test(chunk)) return false;
+    return /[\p{L}\p{N}\u4e00-\u9fff]/u.test(chunk);
   }
 
   private captureUnknownChunkPreview(previews: string[], chunk: string): void {

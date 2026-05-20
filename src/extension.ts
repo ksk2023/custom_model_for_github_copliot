@@ -9,6 +9,9 @@
  */
 
 import * as vscode from "vscode";
+import * as http from "node:http";
+import * as https from "node:https";
+import * as fs from "node:fs";
 import { CustomAIProvider } from "./provider.js";
 import { initLogger, log } from "./logger.js";
 import { getWebviewContent } from "./webview.js";
@@ -26,6 +29,7 @@ import {
 
 let provider: CustomAIProvider | undefined;
 let configPanel: vscode.WebviewPanel | undefined;
+const configWebviews = new Set<vscode.Webview>();
 
 /** API 返回的模型元数据 */
 interface FetchedModelInfo {
@@ -88,10 +92,18 @@ You can also open the config panel with:
   context.subscriptions.push(setupParticipant);
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("customai.openConfig", () => showConfigPanel(context))
+    vscode.window.registerWebviewViewProvider(
+      "customai.configView",
+      new CustomAIConfigViewProvider(context),
+      { webviewOptions: { retainContextWhenHidden: true } }
+    )
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("customai.openConfig", async () => await focusConfigView(context))
   );
   context.subscriptions.push(
-    vscode.commands.registerCommand("customai.addModel", () => showConfigPanel(context))
+    vscode.commands.registerCommand("customai.addModel", async () => await focusConfigView(context))
   );
   context.subscriptions.push(
     vscode.commands.registerCommand("customai.addModelQuick", async () => await quickAddModel())
@@ -117,6 +129,25 @@ You can also open the config panel with:
   log("Calling refreshModelPicker...");
   provider!.refreshModelPicker();
   log("Activation complete");
+}
+
+class CustomAIConfigViewProvider implements vscode.WebviewViewProvider {
+  constructor(private readonly context: vscode.ExtensionContext) {}
+
+  resolveWebviewView(webviewView: vscode.WebviewView): void {
+    log("CustomAIConfigViewProvider: resolving sidebar view");
+    const disposable = configureConfigWebview(webviewView.webview, this.context, "sidebar");
+    webviewView.onDidDispose(() => disposable.dispose());
+  }
+}
+
+async function focusConfigView(context: vscode.ExtensionContext): Promise<void> {
+  try {
+    await vscode.commands.executeCommand("customai.configView.focus");
+  } catch (error) {
+    log(`focusConfigView failed, opening panel fallback: ${(error as Error).message}`);
+    showConfigPanel(context);
+  }
 }
 
 // ══════════════════════════════════════════════════════
@@ -189,7 +220,7 @@ async function quickAddModel(): Promise<void> {
     const url = resolveModelsEndpoint(baseUrl);
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
-    const resp = await fetch(url, { method: "GET", headers });
+    const resp = await requestWithLocalFallback(url, { method: "GET", headers });
     if (resp.ok) {
       const data = await resp.json();
       fetchedModels.push(...parseFetchedModels(data));
@@ -275,7 +306,7 @@ async function fetchAvailableModels(baseUrl: string, apiKey: string): Promise<Fe
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
   log(`Fetching models from: ${url}`);
-  const response = await fetch(url, { method: "GET", headers });
+  const response = await requestWithLocalFallback(url, { method: "GET", headers });
   if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
   return parseFetchedModels(await response.json());
 }
@@ -315,7 +346,7 @@ async function testProviderConnection(
   }
 
   try {
-    const response = await fetch(endpoint, {
+    const response = await requestWithLocalFallback(endpoint, {
       method: "POST",
       headers,
       body: JSON.stringify(body),
@@ -328,6 +359,301 @@ async function testProviderConnection(
   } catch (err) {
     return { ok: false, detail: (err as Error).message };
   }
+}
+
+type SimpleHttpResponse = {
+  ok: boolean;
+  status: number;
+  text(): Promise<string>;
+  json(): Promise<unknown>;
+};
+
+async function requestWithLocalFallback(url: string, init: RequestInit): Promise<SimpleHttpResponse> {
+  if (isLocalEndpoint(url)) {
+    const configuredHosts = vscode.workspace.getConfiguration("customai").get<string[]>("localEndpointHosts", []);
+    const candidates = resolveLocalEndpointCandidates(url, configuredHosts);
+    ensureNoProxyForLocalEndpoints(candidates);
+    let lastError: unknown;
+    for (let index = 0; index < candidates.length; index++) {
+      const candidate = candidates[index];
+      try {
+        log(index === 0
+          ? `Local endpoint detected; using direct HTTP transport: ${candidate}`
+          : `Trying local endpoint candidate ${index + 1}/${candidates.length}: ${candidate}`);
+        return await requestDirect(candidate, init);
+      } catch (error) {
+        lastError = error;
+        const canTryNext = index < candidates.length - 1 && isRetryableTransportError(error);
+        if (!canTryNext) throw error;
+        log(`Local endpoint candidate failed (${describeError(error)}); trying next candidate`);
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  }
+
+  return await fetch(url, init);
+}
+
+function requestDirect(urlString: string, init: RequestInit): Promise<SimpleHttpResponse> {
+  return new Promise((resolve, reject) => {
+    let url: URL;
+    try {
+      url = new URL(urlString);
+    } catch (error) {
+      reject(error);
+      return;
+    }
+
+    const body = typeof init.body === "string" ? init.body : init.body ? String(init.body) : undefined;
+    const headers = { ...(init.headers as Record<string, string> || {}) };
+    if (body !== undefined) {
+      headers["Content-Length"] = Buffer.byteLength(body).toString();
+    }
+
+    const transport = url.protocol === "https:" ? https : http;
+    const req = transport.request(url, {
+      method: init.method || "GET",
+      agent: false,
+      headers,
+    }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on("data", (chunk: Buffer | string) => {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      });
+      res.on("end", () => {
+        const status = res.statusCode || 0;
+        const payload = Buffer.concat(chunks).toString("utf8");
+        resolve({
+          ok: status >= 200 && status < 300,
+          status,
+          text: async () => payload,
+          json: async () => JSON.parse(payload),
+        });
+      });
+    });
+
+    req.setTimeout(30000, () => {
+      const error = new Error("Request timed out after 30s");
+      error.name = "TimeoutError";
+      req.destroy(error);
+    });
+
+    req.on("error", reject);
+    req.end(body);
+  });
+}
+
+function isLocalEndpoint(endpoint: string): boolean {
+  try {
+    return isLocalHostname(new URL(endpoint).hostname);
+  } catch {
+    return false;
+  }
+}
+
+function resolveLocalEndpointCandidates(endpoint: string, configuredHosts: string[]): string[] {
+  const candidates = [endpoint];
+  let url: URL;
+  try {
+    url = new URL(endpoint);
+  } catch {
+    return candidates;
+  }
+
+  const hosts = getLocalEndpointHostCandidates(url.hostname, configuredHosts);
+  for (const host of hosts) {
+    try {
+      const candidate = new URL(endpoint);
+      candidate.hostname = host;
+      const candidateUrl = candidate.toString();
+      if (!candidates.includes(candidateUrl)) candidates.push(candidateUrl);
+    } catch {
+      // Ignore invalid configured host overrides.
+    }
+  }
+  if (candidates.length > 1) log(`Local endpoint candidates: ${candidates.join(", ")}`);
+  return candidates;
+}
+
+function getLocalEndpointHostCandidates(currentHost: string, configuredHosts: string[]): string[] {
+  const current = normalizeHostname(currentHost);
+  const hosts: string[] = [];
+  const addHost = (host: string | undefined): void => {
+    const normalized = normalizeHostname(host || "");
+    if (!normalized || normalized === current || hosts.includes(normalized)) return;
+    hosts.push(normalized);
+  };
+
+  for (const host of configuredHosts || []) addHost(host);
+  addHost("localhost");
+  addHost("127.0.0.1");
+
+  if (isWslEnvironment()) {
+    for (const host of readWslHostCandidates()) addHost(host);
+    addHost("host.docker.internal");
+  }
+
+  return hosts;
+}
+
+function ensureNoProxyForLocalEndpoints(endpoints: string[]): void {
+  const hasLocalEndpoint = endpoints.some((endpoint) => isLocalEndpoint(endpoint));
+  if (!hasLocalEndpoint) return;
+
+  const hosts = new Set<string>(["localhost", "127.0.0.1", "::1"]);
+  for (const endpoint of endpoints) {
+    try {
+      const hostname = normalizeHostname(new URL(endpoint).hostname);
+      if (hostname) hosts.add(hostname);
+    } catch {
+      // Ignore invalid endpoint candidates.
+    }
+  }
+  mergeNoProxyHosts([...hosts]);
+}
+
+function mergeNoProxyHosts(hosts: string[]): void {
+  const current = `${process.env.NO_PROXY || ""},${process.env.no_proxy || ""}`;
+  const values = current
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const normalized = new Set(values.map((value) => normalizeHostname(value)));
+  let changed = false;
+
+  for (const host of hosts) {
+    const normalizedHost = normalizeHostname(host);
+    if (!normalizedHost || normalized.has(normalizedHost)) continue;
+    values.push(host);
+    normalized.add(normalizedHost);
+    changed = true;
+  }
+
+  if (changed) {
+    const next = values.join(",");
+    process.env.NO_PROXY = next;
+    process.env.no_proxy = next;
+    log(`NO_PROXY updated for local endpoints: ${hosts.join(", ")}`);
+  }
+}
+
+function readWslHostCandidates(): string[] {
+  const hosts: string[] = [];
+  const add = (value: string | undefined): void => {
+    const host = (value || "").trim();
+    if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(host) && !hosts.includes(host)) hosts.push(host);
+  };
+
+  add(process.env.CUSTOMAI_LOCAL_HOST);
+  add(process.env.WSL_HOST_IP);
+
+  try {
+    const resolvConf = fs.readFileSync("/etc/resolv.conf", "utf8");
+    for (const match of resolvConf.matchAll(/^\s*nameserver\s+([^\s#]+)/gm)) {
+      add(match[1]);
+    }
+  } catch {
+    // Not running on WSL/Linux or resolv.conf is unavailable.
+  }
+
+  return hosts;
+}
+
+function isWslEnvironment(): boolean {
+  if (process.env.WSL_DISTRO_NAME || process.env.WSL_INTEROP) return true;
+  try {
+    return fs.readFileSync("/proc/version", "utf8").toLowerCase().includes("microsoft");
+  } catch {
+    return false;
+  }
+}
+
+function normalizeHostname(hostname: string): string {
+  return hostname.trim().toLowerCase().replace(/^\[/, "").replace(/\]$/, "");
+}
+
+function isLocalHostname(hostname: string): boolean {
+  const normalized = normalizeHostname(hostname);
+  return normalized === "localhost"
+    || normalized === "127.0.0.1"
+    || normalized === "::1"
+    || normalized === "host.docker.internal"
+    || normalized.endsWith(".local")
+    || isPrivateIpv4(normalized);
+}
+
+function isPrivateIpv4(hostname: string): boolean {
+  const parts = hostname.split(".").map((part) => Number(part));
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+    return false;
+  }
+  const [first, second] = parts;
+  return first === 10
+    || (first === 172 && second >= 16 && second <= 31)
+    || (first === 192 && second === 168)
+    || (first === 169 && second === 254);
+}
+
+function isRetryableTransportError(error: unknown): boolean {
+  const messages = collectErrorChain(error)
+    .map((item) => item.message.toLowerCase())
+    .join(" ");
+  const codes = collectErrorChain(error)
+    .map((item) => item.code.toLowerCase())
+    .filter(Boolean);
+  return [
+    "socket hang up",
+    "fetch failed",
+    "econnreset",
+    "econnrefused",
+    "etimedout",
+    "ehostunreach",
+    "enetworkdown",
+    "enotfound",
+    "socket closed",
+    "premature close",
+    "aborted",
+    "terminated",
+    "connection closed",
+    "und_err_socket",
+  ].some((value) => messages.includes(value) || codes.includes(value));
+}
+
+function describeError(error: unknown): string {
+  return collectErrorChain(error)
+    .map((item) => item.code ? `${item.message} (${item.code})` : item.message)
+    .filter(Boolean)
+    .join("; ") || String(error);
+}
+
+function collectErrorChain(error: unknown): Array<{ message: string; code: string }> {
+  const result: Array<{ message: string; code: string }> = [];
+  let current: unknown = error;
+  const seen = new Set<unknown>();
+  while (current && !seen.has(current)) {
+    seen.add(current);
+    if (current instanceof Error) {
+      const err = current as NodeJS.ErrnoException & { cause?: unknown };
+      result.push({
+        message: err.message || err.name || "",
+        code: typeof err.code === "string" ? err.code : "",
+      });
+      current = err.cause;
+      continue;
+    }
+    if (typeof current === "object") {
+      const record = current as Record<string, unknown>;
+      result.push({
+        message: typeof record.message === "string" ? record.message : "",
+        code: typeof record.code === "string" ? record.code : "",
+      });
+      current = record.cause;
+      continue;
+    }
+    result.push({ message: String(current), code: "" });
+    break;
+  }
+  return result;
 }
 
 function resolveModelsEndpoint(baseUrl: string): string {
@@ -517,7 +843,7 @@ function showConfigPanel(context: vscode.ExtensionContext): void {
   log("showConfigPanel: open requested");
   if (configPanel) {
     configPanel.reveal(vscode.ViewColumn.One);
-    sendConfig();
+    sendConfig(configPanel.webview);
     return;
   }
 
@@ -528,85 +854,118 @@ function showConfigPanel(context: vscode.ExtensionContext): void {
     { retainContextWhenHidden: true, enableScripts: true }
   );
 
-  configPanel.webview.onDidReceiveMessage(async (message) => {
-    log(`showConfigPanel: received message ${message?.type || "unknown"}`);
-    switch (message.type) {
-      case "getConfig":
-        sendConfig();
-        break;
-      case "saveProvider": {
-        const prov: Provider = message.provider;
-        if (!prov.name || !prov.baseUrl) return;
-        await saveProvider(prov);
-        provider?.refreshModelPicker();
-        sendConfig();
-        break;
-      }
-      case "deleteProvider": {
-        await deleteProvider(message.id);
-        provider?.refreshModelPicker();
-        sendConfig();
-        break;
-      }
-      case "fetchModels": {
-        try {
-          const fetched = await fetchAvailableModels(message.baseUrl, message.apiKey || "");
-          configPanel?.webview.postMessage({ type: "modelsFetched", models: fetched, providerId: message.providerId });
-        } catch (err: any) {
-          configPanel?.webview.postMessage({ type: "modelsFetchError", error: err.message, providerId: message.providerId });
-        }
-        break;
-      }
-      case "testProvider": {
-        const result = await testProviderConnection(
-          message.baseUrl,
-          message.apiKey || "",
-          message.modelName || "",
-          message.providerName || ""
-        );
-        configPanel?.webview.postMessage({
-          type: "providerTestResult",
-          providerId: message.providerId,
-          ok: result.ok,
-          detail: result.detail,
-        });
-        break;
-      }
-      case "saveModels": {
-        const { providerId, models: providerModels } = message as { providerId: string; models: AIModel[] };
-        const allModels = getModels();
-        const otherModels = allModels.filter((m: AIModel) => m.providerId !== providerId);
-        const merged = otherModels.concat(providerModels);
-        await saveModels(merged);
-        provider?.refreshModelPicker();
-        sendConfig();
-        break;
-      }
-    }
+  const disposable = configureConfigWebview(configPanel.webview, context, "panel");
+  configPanel.onDidDispose(() => {
+    configPanel = undefined;
+    disposable.dispose();
+  });
+}
+
+function configureConfigWebview(
+  webview: vscode.Webview,
+  _context: vscode.ExtensionContext,
+  source: string
+): vscode.Disposable {
+  webview.options = { enableScripts: true };
+  configWebviews.add(webview);
+
+  const messageDisposable = webview.onDidReceiveMessage(async (message) => {
+    await handleConfigWebviewMessage(webview, message, source);
   });
 
-  configPanel.webview.html = getWebviewContent();
+  webview.html = getWebviewContent();
+  scheduleConfigSends(webview);
 
-  // 重试 5 次发送配置数据（解决 Webview 初始化竞态）
+  return new vscode.Disposable(() => {
+    configWebviews.delete(webview);
+    messageDisposable.dispose();
+  });
+}
+
+async function handleConfigWebviewMessage(webview: vscode.Webview, message: any, source: string): Promise<void> {
+  log(`${source}: received message ${message?.type || "unknown"}`);
+  switch (message.type) {
+    case "getConfig":
+      sendConfig(webview);
+      break;
+    case "saveProvider": {
+      const prov: Provider = message.provider;
+      if (!prov.name || !prov.baseUrl) return;
+      await saveProvider(prov);
+      provider?.refreshModelPicker();
+      sendConfig();
+      break;
+    }
+    case "deleteProvider": {
+      await deleteProvider(message.id);
+      provider?.refreshModelPicker();
+      sendConfig();
+      break;
+    }
+    case "fetchModels": {
+      try {
+        const fetched = await fetchAvailableModels(message.baseUrl, message.apiKey || "");
+        webview.postMessage({ type: "modelsFetched", models: fetched, providerId: message.providerId });
+      } catch (err: any) {
+        webview.postMessage({ type: "modelsFetchError", error: err.message, providerId: message.providerId });
+      }
+      break;
+    }
+    case "testProvider": {
+      const result = await testProviderConnection(
+        message.baseUrl,
+        message.apiKey || "",
+        message.modelName || "",
+        message.providerName || ""
+      );
+      webview.postMessage({
+        type: "providerTestResult",
+        providerId: message.providerId,
+        ok: result.ok,
+        detail: result.detail,
+      });
+      break;
+    }
+    case "saveModels": {
+      const { providerId, models: providerModels } = message as { providerId: string; models: AIModel[] };
+      const allModels = getModels();
+      const otherModels = allModels.filter((m: AIModel) => m.providerId !== providerId);
+      const merged = otherModels.concat(providerModels);
+      await saveModels(merged);
+      provider?.refreshModelPicker();
+      sendConfig();
+      break;
+    }
+  }
+}
+
+function scheduleConfigSends(webview: vscode.Webview): void {
   let retries = 0;
   const retrySend = setInterval(() => {
-    sendConfig();
+    if (!configWebviews.has(webview)) {
+      clearInterval(retrySend);
+      return;
+    }
+    sendConfig(webview);
     retries++;
     if (retries >= 5) clearInterval(retrySend);
   }, 150);
-
-  configPanel.onDidDispose(() => { configPanel = undefined; });
 }
 
-/** 向 Webview 发送完整的 providers + models 配置数据 */
-function sendConfig(): void {
+/** 向一个或全部 Webview 发送完整的 providers + models 配置数据 */
+function sendConfig(target?: vscode.Webview): void {
   const p = getProviders();
   const m = getModels();
   log(`sendConfig: providers=${p.length}, models=${m.length}`);
-  if (configPanel) {
-    configPanel.webview.postMessage({ type: "config", providers: p, models: m });
-  } else {
-    log("sendConfig: configPanel is null!");
+
+  const targets = target ? [target] : Array.from(configWebviews);
+  if (targets.length === 0) {
+    log("sendConfig: no active config webviews");
+    return;
+  }
+
+  for (const webview of targets) {
+    webview.postMessage({ type: "config", providers: p, models: m });
   }
 }
 
@@ -614,5 +973,6 @@ function sendConfig(): void {
 export function deactivate(): void {
   provider?.prepareForDeactivate();
   configPanel?.dispose();
+  configWebviews.clear();
 }
 

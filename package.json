@@ -2,7 +2,7 @@
   "name": "custom-copilot-chat",
   "displayName": "Custom Copilot Chat",
   "description": "Add custom AI models to GitHub Copilot Chat model picker - OpenAI, Claude, Ollama, and any OpenAI-compatible API",
-  "version": "1.1.8",
+  "version": "1.1.18",
   "publisher": "custom-copilot",
   "repository": "https://github.com/ksk2023/custom_model_for_github_copliot",
   "engines": {
@@ -48,6 +48,26 @@
         "description": "Add or manage custom AI models"
       }
     ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "customai",
+          "title": "Custom AI",
+          "icon": "resources/customai.svg"
+        }
+      ]
+    },
+    "views": {
+      "customai": [
+        {
+          "type": "webview",
+          "id": "customai.configView",
+          "name": "模型设置",
+          "icon": "resources/customai.svg",
+          "contextualTitle": "Custom AI 模型设置"
+        }
+      ]
+    },
     "commands": [
       {
         "command": "customai.openConfig",
@@ -87,6 +107,34 @@
           "default": 4096,
           "description": "Default max tokens for model responses"
         },
+        "customai.streamMode": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "stream",
+            "non-stream"
+          ],
+          "default": "auto",
+          "description": "Response streaming mode. Auto disables streaming for local endpoints and uses a one-shot non-stream fallback when stream transport disconnects."
+        },
+        "customai.localEndpointHosts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Extra hostnames or IPs to try when a configured endpoint uses localhost/127.0.0.1 from WSL or remote environments."
+        },
+        "customai.localCompatibilityMode": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "full",
+            "minimal"
+          ],
+          "default": "auto",
+          "description": "Compatibility mode for local reverse proxies. Auto retries a minimal OpenAI-compatible non-stream request after local 502/connection failures; minimal always strips tools and reasoning parameters."
+        },
         "customai.debug": {
           "type": "boolean",
           "default": false,
@@ -99,7 +147,7 @@
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "build": "npm run compile && vsce package --pre-release --allow-missing-repository"
+    "build": "npm run compile && vsce package --pre-release --allow-missing-repository --no-yarn --no-dependencies"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
