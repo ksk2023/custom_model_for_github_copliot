@@ -176,7 +176,7 @@ export function getWebviewContent(): string {
     "      margin-bottom: 3px;",
     "      color: var(--desc);",
     "    }",
-    "    .form-group input, .form-group textarea {",
+    "    .form-group input, .form-group textarea, .form-group select {",
     "      width: 100%;",
     "      padding: 7px 8px;",
     "      background: var(--input-bg);",
@@ -188,7 +188,7 @@ export function getWebviewContent(): string {
     "    }",
     "    .form-group textarea { resize: vertical; min-height: 82px; }",
     "    .form-help { color: var(--desc); font-size: 10px; margin-top: 4px; line-height: 1.4; }",
-    "    .form-group input:focus, .form-group textarea:focus { outline: none; border-color: var(--focus); }",
+    "    .form-group input:focus, .form-group textarea:focus, .form-group select:focus { outline: none; border-color: var(--focus); }",
     "    .error-text { color: #f14c4c; font-size: 11px; margin-top: 8px; }",
     "    .success-text { color: #89d185; font-size: 11px; }",
     "    @media (max-width: 480px) {",
@@ -260,6 +260,44 @@ export function getWebviewContent(): string {
     "      </div>",
     "    </div>",
     "  </div>",
+    "  <div class=\"modal\" id=\"modalManualModel\">",
+    "    <div class=\"modal-content\">",
+    "      <div class=\"modal-header\" id=\"manualModelTitle\">手动添加模型</div>",
+    "      <div class=\"modal-body\">",
+    "        <div class=\"form-group\">",
+    "          <label>模型 ID</label>",
+    "          <textarea id=\"manualModelsInput\" placeholder=\"每行一个，或用逗号分隔&#10;gpt-5.5&#10;gemini-2.5-pro&#10;claude-sonnet-4-20250514\"></textarea>",
+    "          <div class=\"form-help\">适合中转站 /models 返回不全，但你已知道模型 ID 的情况。</div>",
+    "        </div>",
+    "      </div>",
+    "      <div class=\"modal-footer\">",
+    "        <button class=\"btn btn-primary\" id=\"btnManualModelCancel\">取消</button>",
+    "        <button class=\"btn btn-primary\" id=\"btnManualModelSave\">添加模型</button>",
+    "      </div>",
+    "    </div>",
+    "  </div>",
+    "  <div class=\"modal\" id=\"modalPresetModels\">",
+    "    <div class=\"modal-content\">",
+    "      <div class=\"modal-header\" id=\"presetModelsTitle\">导入模型预设</div>",
+    "      <div class=\"modal-body\">",
+    "        <div class=\"form-group\">",
+    "          <label>预设分组</label>",
+    "          <select id=\"presetModelGroup\">",
+    "            <option value=\"all\">全部：GPT + Gemini + Claude + DeepSeek</option>",
+    "            <option value=\"openai\">OpenAI / GPT</option>",
+    "            <option value=\"gemini\">Google Gemini</option>",
+    "            <option value=\"claude\">Anthropic Claude</option>",
+    "            <option value=\"deepseek\">DeepSeek</option>",
+    "          </select>",
+    "          <div class=\"form-help\">导入后可以在模型列表里逐个删除不需要的模型。</div>",
+    "        </div>",
+    "      </div>",
+    "      <div class=\"modal-footer\">",
+    "        <button class=\"btn btn-primary\" id=\"btnPresetModelsCancel\">取消</button>",
+    "        <button class=\"btn btn-primary\" id=\"btnPresetModelsImport\">导入预设</button>",
+    "      </div>",
+    "    </div>",
+    "  </div>",
     "  <div class=\"modal\" id=\"modalDelete\">",
     "    <div class=\"modal-content\" style=\"width:360px\">",
     "      <div class=\"modal-header\">确认删除</div>",
@@ -291,6 +329,8 @@ function getWebviewScript(): string {
   lines.push("  var deletingId = null;");
   lines.push("  var fingerprintProviderId = null;");
   lines.push("  var editingFingerprintId = null;");
+  lines.push("  var manualModelProviderId = null;");
+  lines.push("  var presetProviderId = null;");
   lines.push("  var loadTimer = null;");
   lines.push("");
   lines.push("  boot();");
@@ -441,6 +481,10 @@ function getWebviewScript(): string {
   lines.push("    document.getElementById('btnDeleteCancel').onclick = function() { hideModal('modalDelete'); deletingId = null; };");
   lines.push("    document.getElementById('btnFingerprintSave').onclick = saveFingerprint;");
   lines.push("    document.getElementById('btnFingerprintCancel').onclick = function() { hideModal('modalFingerprint'); fingerprintProviderId = null; editingFingerprintId = null; };");
+  lines.push("    document.getElementById('btnManualModelSave').onclick = saveManualModels;");
+  lines.push("    document.getElementById('btnManualModelCancel').onclick = function() { hideModal('modalManualModel'); manualModelProviderId = null; };");
+  lines.push("    document.getElementById('btnPresetModelsImport').onclick = importPresetSelection;");
+  lines.push("    document.getElementById('btnPresetModelsCancel').onclick = function() { hideModal('modalPresetModels'); presetProviderId = null; };");
   lines.push("  }");
   lines.push("");
   lines.push("  function bindProviderEvents() {");
@@ -695,20 +739,43 @@ function getWebviewScript(): string {
   lines.push("  function manualAddModel(providerId) {");
   lines.push("    var provider = getProvider(providerId);");
   lines.push("    if (!provider) return;");
-  lines.push("    var raw = prompt('输入模型 ID，可用逗号或换行分隔，例如：\\ngpt-5.5\\ngemini-2.5-pro\\nclaude-sonnet-4-20250514', 'gpt-5.5');");
-  lines.push("    if (!raw) return;");
+  lines.push("    manualModelProviderId = providerId;");
+  lines.push("    document.getElementById('manualModelTitle').textContent = '为 ' + provider.name + ' 手动添加模型';");
+  lines.push("    document.getElementById('manualModelsInput').value = '';");
+  lines.push("    document.getElementById('modalManualModel').classList.add('show');");
+  lines.push("  }");
+  lines.push("");
+  lines.push("  function saveManualModels() {");
+  lines.push("    var providerId = manualModelProviderId;");
+  lines.push("    var provider = getProvider(providerId);");
+  lines.push("    if (!provider) return;");
+  lines.push("    var raw = document.getElementById('manualModelsInput').value.trim();");
+  lines.push("    if (!raw) { alert('请输入至少一个模型 ID'); return; }");
   lines.push("    var items = raw.split(/[\\n,;]+/).map(function(item) { return item.trim(); }).filter(function(item) { return !!item; }).map(function(id) { return { id: id }; });");
   lines.push("    handleModelsFetched(providerId, items);");
+  lines.push("    hideModal('modalManualModel');");
+  lines.push("    manualModelProviderId = null;");
   lines.push("  }");
   lines.push("");
   lines.push("  function importPresetModels(providerId) {");
   lines.push("    var provider = getProvider(providerId);");
   lines.push("    if (!provider) return;");
-  lines.push("    var choice = prompt('选择预设：all / openai / gemini / claude / deepseek', 'all');");
-  lines.push("    if (!choice) return;");
+  lines.push("    presetProviderId = providerId;");
+  lines.push("    document.getElementById('presetModelsTitle').textContent = '为 ' + provider.name + ' 导入模型预设';");
+  lines.push("    document.getElementById('presetModelGroup').value = 'all';");
+  lines.push("    document.getElementById('modalPresetModels').classList.add('show');");
+  lines.push("  }");
+  lines.push("");
+  lines.push("  function importPresetSelection() {");
+  lines.push("    var providerId = presetProviderId;");
+  lines.push("    var provider = getProvider(providerId);");
+  lines.push("    if (!provider) return;");
+  lines.push("    var choice = document.getElementById('presetModelGroup').value;");
   lines.push("    var presets = getPresetModels(choice);");
   lines.push("    if (presets.length === 0) { alert('没有匹配的预设：' + choice); return; }");
   lines.push("    handleModelsFetched(providerId, presets);");
+  lines.push("    hideModal('modalPresetModels');");
+  lines.push("    presetProviderId = null;");
   lines.push("  }");
   lines.push("");
   lines.push("  function getPresetModels(choice) {");
