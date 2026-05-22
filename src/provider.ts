@@ -1301,6 +1301,13 @@ export class CustomAIProvider {
           }
         }
 
+        const legacyFunctionCall = delta?.function_call || delta?.functionCall || choice?.function_call || choice?.functionCall;
+        if (legacyFunctionCall) {
+          if (this.accumulateLegacyFunctionCall(legacyFunctionCall, choice?.index, toolCallAccumulators)) {
+            handledKnownStreamEvent = true;
+          }
+        }
+
         if (finishReason === "tool_calls" || finishReason === "tool_use" || finishReason === "function_call") {
           if (this.flushToolCallAccumulators(toolCallAccumulators, progress)) {
             emitted = true;
@@ -1309,11 +1316,19 @@ export class CustomAIProvider {
       }
     }
 
+    if (this.accumulateResponsesApiToolCall(parsed, toolCallAccumulators)) {
+      handledKnownStreamEvent = true;
+    }
+
+    if (this.reportAnthropicToolUse(parsed, progress)) {
+      emitted = true;
+    }
+
     if (!text && !handledKnownStreamEvent && !emitted) {
       this.captureUnknownChunkPreview(unknownChunkPreviews, trimmed);
     }
 
-    return emitted;
+    return emitted || handledKnownStreamEvent;
   }
 
   private accumulateToolCallDeltas(
@@ -1349,6 +1364,80 @@ export class CustomAIProvider {
       handled = true;
     }
     return handled;
+  }
+
+  private accumulateLegacyFunctionCall(
+    functionCall: unknown,
+    indexHint: unknown,
+    toolCallAccumulators: Map<number, { id?: string; name?: string; arguments: string }>
+  ): boolean {
+    if (!functionCall || typeof functionCall !== "object") return false;
+    const record = functionCall as Record<string, unknown>;
+    const index = typeof indexHint === "number" ? indexHint : 0;
+    const existing = toolCallAccumulators.get(index) || { arguments: "" };
+    const name = this.firstString(record.name, record.tool_name, record.toolName);
+    if (name) existing.name = name;
+    const id = this.firstString(record.id, record.call_id, record.callId);
+    if (id) existing.id = id;
+    const argumentDelta = record.arguments ?? record.input ?? record.args;
+    if (typeof argumentDelta === "string") {
+      existing.arguments += argumentDelta;
+    } else if (argumentDelta !== undefined && argumentDelta !== null) {
+      existing.arguments += JSON.stringify(argumentDelta);
+    }
+    toolCallAccumulators.set(index, existing);
+    return true;
+  }
+
+  private accumulateResponsesApiToolCall(
+    parsed: unknown,
+    toolCallAccumulators: Map<number, { id?: string; name?: string; arguments: string }>
+  ): boolean {
+    if (!parsed || typeof parsed !== "object") return false;
+    const record = parsed as Record<string, any>;
+    const type = typeof record.type === "string" ? record.type : "";
+    const item = record.item && typeof record.item === "object" ? record.item : record;
+
+    if (type.includes("function_call_arguments") && typeof record.delta === "string") {
+      const index = typeof record.output_index === "number" ? record.output_index : 0;
+      const existing = toolCallAccumulators.get(index) || { arguments: "" };
+      existing.id = this.firstString(record.item_id, record.call_id, record.callId, existing.id) || existing.id;
+      existing.arguments += record.delta;
+      toolCallAccumulators.set(index, existing);
+      return true;
+    }
+
+    if (item && (item.type === "function_call" || item.type === "tool_call")) {
+      const index = typeof record.output_index === "number"
+        ? record.output_index
+        : typeof item.index === "number"
+          ? item.index
+          : 0;
+      const existing = toolCallAccumulators.get(index) || { arguments: "" };
+      existing.id = this.firstString(item.call_id, item.callId, item.id, record.item_id, existing.id) || existing.id;
+      existing.name = this.firstString(item.name, item.tool_name, item.toolName, existing.name) || existing.name;
+      if (typeof item.arguments === "string") existing.arguments += item.arguments;
+      toolCallAccumulators.set(index, existing);
+      return true;
+    }
+
+    return false;
+  }
+
+  private reportAnthropicToolUse(
+    parsed: unknown,
+    progress: vscode.Progress<vscode.LanguageModelResponsePart>
+  ): boolean {
+    if (!parsed || typeof parsed !== "object") return false;
+    const record = parsed as Record<string, any>;
+    if (record.type !== "content_block_start") return false;
+    const block = record.content_block;
+    if (!block || typeof block !== "object" || block.type !== "tool_use") return false;
+    const id = this.firstString(block.id, block.call_id, block.callId) || `tool_call_${Date.now()}`;
+    const name = this.firstString(block.name, block.tool_name, block.toolName);
+    if (!name) return false;
+    progress.report(new vscode.LanguageModelToolCallPart(id, name, this.parseToolCallInput(block.input || {})));
+    return true;
   }
 
   private flushToolCallAccumulators(
