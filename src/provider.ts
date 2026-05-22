@@ -159,7 +159,7 @@ export class CustomAIProvider {
     log(`provideLanguageModelChatResponse called for model: ${model.displayName} (provider: ${provider.name})`);
 
     const apiMessages = this.convertMessages(messages);
-    const isAnthropic = provider.name.toLowerCase().includes("anthropic") || provider.name.toLowerCase().includes("claude");
+    const isAnthropic = this.shouldUseAnthropicProtocol(provider);
 
     const config = vscode.workspace.getConfiguration("customai");
     const temperature = config.get<number>("defaultTemperature", 0.7);
@@ -384,6 +384,16 @@ export class CustomAIProvider {
       // Fall back to legacy concatenation for non-standard URLs.
     }
     return `${trimmed}/chat/completions`;
+  }
+
+  private shouldUseAnthropicProtocol(provider: Provider): boolean {
+    const name = provider.name.toLowerCase();
+    const baseUrl = provider.baseUrl.toLowerCase();
+    if (baseUrl.includes("api.anthropic.com")) return true;
+    if (baseUrl.endsWith("/messages")) return true;
+    if (baseUrl.includes("/v1/chat/completions") || baseUrl.includes("/chat/completions")) return false;
+    if (baseUrl.includes("/openai") || baseUrl.includes("oneapi") || baseUrl.includes("new-api")) return false;
+    return name.includes("anthropic") || name.includes("claude");
   }
 
   private resolveEndpointCandidates(endpoint: string, configuredHosts: string[]): string[] {
@@ -746,7 +756,7 @@ export class CustomAIProvider {
     const decoder = new TextDecoder();
     let buffer = "";
     const toolCallAccumulators: Map<number, { id?: string; name?: string; arguments: string }> = new Map();
-    let emittedText = false;
+    let emittedResponse = false;
     const unknownChunkPreviews: string[] = [];
     const eventDataLines: string[] = [];
     const flushEventData = (): void => {
@@ -754,7 +764,7 @@ export class CustomAIProvider {
       const data = eventDataLines.join("\n").trim();
       eventDataLines.length = 0;
       if (this.reportStreamChunk(data, progress, isAnthropic, toolCallAccumulators, unknownChunkPreviews)) {
-        emittedText = true;
+        emittedResponse = true;
       }
     };
 
@@ -780,7 +790,7 @@ export class CustomAIProvider {
         } else {
           flushEventData();
           if (this.reportStreamChunk(trimmedLine, progress, isAnthropic, toolCallAccumulators, unknownChunkPreviews)) {
-            emittedText = true;
+            emittedResponse = true;
           }
         }
       }
@@ -790,10 +800,13 @@ export class CustomAIProvider {
       eventDataLines.push(trimmedBuffer.startsWith("data:") ? trimmedBuffer.slice(5).trimStart() : trimmedBuffer);
     }
     flushEventData();
-    if (!emittedText && unknownChunkPreviews.length > 0) {
+    if (this.flushToolCallAccumulators(toolCallAccumulators, progress)) {
+      emittedResponse = true;
+    }
+    if (!emittedResponse && unknownChunkPreviews.length > 0) {
       log(`No text emitted from stream. Sample chunks: ${unknownChunkPreviews.join(" | ")}`);
     }
-    if (!emittedText) {
+    if (!emittedResponse) {
       const sample = unknownChunkPreviews.length > 0
         ? ` Sample chunks: ${unknownChunkPreviews.join(" | ")}`
         : "";
@@ -1264,41 +1277,112 @@ export class CustomAIProvider {
 
     this.throwIfApiError(parsed);
     const text = this.extractResponseText(parsed, isAnthropic);
+    let emitted = false;
+    let handledKnownStreamEvent = false;
     if (text) {
       progress.report(new vscode.LanguageModelTextPart(text));
-    } else {
-      this.captureUnknownChunkPreview(unknownChunkPreviews, trimmed);
+      emitted = true;
+    }
+
+    if (this.isKnownEmptyStreamChunk(parsed)) {
+      handledKnownStreamEvent = true;
     }
 
     if (!isAnthropic) {
-      const delta = parsed.choices?.[0]?.delta;
-      const finishReason = parsed.choices?.[0]?.finish_reason;
+      const choices = Array.isArray(parsed.choices) ? parsed.choices : [];
+      for (const choice of choices) {
+        const delta = choice?.delta || choice?.message || {};
+        const finishReason = choice?.finish_reason || choice?.finishReason;
 
-      if (delta?.tool_calls) {
-        for (const tc of delta.tool_calls) {
-          const existing = toolCallAccumulators.get(tc.index) || { arguments: "" };
-          if (tc.id) { existing.id = tc.id; }
-          if (tc.function?.name) { existing.name = tc.function.name; }
-          if (tc.function?.arguments) { existing.arguments += tc.function.arguments; }
-          toolCallAccumulators.set(tc.index, existing);
+        if (delta?.tool_calls || delta?.toolCalls || choice?.tool_calls || choice?.toolCalls) {
+          const toolCalls = delta?.tool_calls || delta?.toolCalls || choice?.tool_calls || choice?.toolCalls;
+          if (this.accumulateToolCallDeltas(toolCalls, toolCallAccumulators)) {
+            handledKnownStreamEvent = true;
+          }
         }
-      }
 
-      if (finishReason === "tool_calls") {
-        for (const [, tc] of toolCallAccumulators) {
-          if (tc.name && tc.id) {
-            try {
-              const input = JSON.parse(tc.arguments || "{}");
-              progress.report(new vscode.LanguageModelToolCallPart(tc.id, tc.name, input));
-            } catch {
-              progress.report(new vscode.LanguageModelToolCallPart(tc.id, tc.name, {}));
-            }
+        if (finishReason === "tool_calls" || finishReason === "tool_use" || finishReason === "function_call") {
+          if (this.flushToolCallAccumulators(toolCallAccumulators, progress)) {
+            emitted = true;
           }
         }
       }
     }
 
-    return !!text;
+    if (!text && !handledKnownStreamEvent && !emitted) {
+      this.captureUnknownChunkPreview(unknownChunkPreviews, trimmed);
+    }
+
+    return emitted;
+  }
+
+  private accumulateToolCallDeltas(
+    toolCalls: unknown,
+    toolCallAccumulators: Map<number, { id?: string; name?: string; arguments: string }>
+  ): boolean {
+    if (!Array.isArray(toolCalls)) return false;
+    let handled = false;
+    for (let fallbackIndex = 0; fallbackIndex < toolCalls.length; fallbackIndex++) {
+      const rawToolCall = toolCalls[fallbackIndex];
+      if (!rawToolCall || typeof rawToolCall !== "object") continue;
+      const toolCall = rawToolCall as Record<string, any>;
+      const index = typeof toolCall.index === "number" ? toolCall.index : fallbackIndex;
+      const existing = toolCallAccumulators.get(index) || { arguments: "" };
+      if (typeof toolCall.id === "string" && toolCall.id) existing.id = toolCall.id;
+      if (typeof toolCall.name === "string" && toolCall.name) existing.name = toolCall.name;
+      if (typeof toolCall.tool_name === "string" && toolCall.tool_name) existing.name = toolCall.tool_name;
+      if (typeof toolCall.toolName === "string" && toolCall.toolName) existing.name = toolCall.toolName;
+
+      const fn = toolCall.function && typeof toolCall.function === "object"
+        ? toolCall.function as Record<string, unknown>
+        : undefined;
+      if (typeof fn?.name === "string" && fn.name) existing.name = fn.name;
+
+      const argumentDelta = fn?.arguments ?? toolCall.arguments ?? toolCall.input ?? toolCall.args;
+      if (typeof argumentDelta === "string") {
+        existing.arguments += argumentDelta;
+      } else if (argumentDelta !== undefined && argumentDelta !== null) {
+        existing.arguments += JSON.stringify(argumentDelta);
+      }
+
+      toolCallAccumulators.set(index, existing);
+      handled = true;
+    }
+    return handled;
+  }
+
+  private flushToolCallAccumulators(
+    toolCallAccumulators: Map<number, { id?: string; name?: string; arguments: string }>,
+    progress: vscode.Progress<vscode.LanguageModelResponsePart>
+  ): boolean {
+    let emitted = false;
+    for (const [index, toolCall] of toolCallAccumulators) {
+      if (!toolCall.name) continue;
+      const id = toolCall.id || `tool_call_${index + 1}`;
+      const input = this.parseToolCallInput(toolCall.arguments || "{}");
+      progress.report(new vscode.LanguageModelToolCallPart(id, toolCall.name, input));
+      emitted = true;
+    }
+    if (emitted) {
+      toolCallAccumulators.clear();
+    }
+    return emitted;
+  }
+
+  private isKnownEmptyStreamChunk(parsed: unknown): boolean {
+    if (!parsed || typeof parsed !== "object") return false;
+    const record = parsed as Record<string, any>;
+    if (Array.isArray(record.choices)) {
+      return record.choices.some((choice: any) => {
+        const delta = choice?.delta || choice?.message || {};
+        return delta?.role === "assistant"
+          || delta?.content === ""
+          || delta?.text === ""
+          || choice?.finish_reason === "stop"
+          || choice?.finish_reason === "tool_calls";
+      });
+    }
+    return false;
   }
 
   private extractResponseText(parsed: any, isAnthropic: boolean): string {
