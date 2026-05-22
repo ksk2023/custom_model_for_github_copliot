@@ -3,207 +3,253 @@
 [English](./README.md) | [中文](./README_zh.md)
 
 ![VS Code](https://img.shields.io/badge/VS%20Code-%23007ACC?style=flat&logo=visual-studio-code&logoColor=white)
-![Version](https://img.shields.io/badge/version-1.1.29-blue?style=flat)
+![Version](https://img.shields.io/badge/version-1.1.30-blue?style=flat)
 ![License](https://img.shields.io/badge/license-MIT-green?style=flat)
 ![TypeScript](https://img.shields.io/badge/TypeScript-%23007ACC?style=flat&logo=typescript&logoColor=white)
+
+Custom Copilot Chat 可以让 GitHub Copilot Chat 使用 OpenAI 兼容 API、中转站、本地反代、Anthropic 兼容端点和 Ollama 本地服务里的自定义模型。
+
+这个扩展的重点不只是“能聊天”，而是深度适配 Copilot：它会规范化中转站响应、把工具调用桥接成 VS Code Copilot 工具调用，并在侧边栏提供供应商、模型、预设和指纹管理界面。
+
+---
+
+## ✨ 1.1.30 更新
+
+- **中英文文档同步**：英文 README 和中文 README 现在同步描述当前行为、配置项、安装方式和兼容性说明。
+- **最新版 VSIX 流程**：安装示例已更新为 `custom-copilot-chat-1.1.30.vsix`。
+- **中转站兼容说明**：补充工具调用桥接、端点规范化、模型获取和手动预设如何配合使用。
 
 ---
 
 ## ✨ 功能特性
 
-<table>
-  <tr>
-    <td width="50%">
-
-### 🧩 多提供商支持
-
-支持所有 **OpenAI 兼容 API**，包括 OpenAI、Anthropic、Ollama 等任意接口。
-
-### 🇨🇳 国内模型开箱即用
-
-内置阶跃星辰、智谱AI、月之暗面、DeepSeek、百川、零一万物等国内主流大模型预设。
-
-### 🔄 动态获取模型
-
-填入 Base URL 和 API Key → 点击 **"获取可用模型"** → 多端点尝试并解析中转站嵌套返回，尽量拉全模型列表。
-
-### 🎨 可视化配置
-
-全部通过 VS Code Webview 面板完成配置，无需手动编辑 JSON 文件。
-
-### 🧬 指纹管理
-
-每个供应商可新增、编辑、删除并启用指纹 Header，适配需要设备指纹或会话指纹的中转站/本地反代。
-
-### ✍️ 手动模型与预设导入
-
-自动获取不完整时，可在侧边栏手动添加模型 ID，或一键导入 GPT、Gemini、Claude、DeepSeek 等常用预设。
-
-### ⚡ 快速添加模板
-
-每个内置提供商均有一键快捷模板，数秒内完成配置。
-
-    </td>
-    <td>
-
-### 🛡️ 双层架构
-
-`提供商 → 模型` 两层配置。一个提供商可管理多个模型，各自拥有独立的温度、Token 上限等参数。
-
-### 🌡️ 逐模型温度控制
-
-每款模型可单独设置 `temperature` 和 `maxTokens`，灵活覆盖全局默认值。
-
-### 🔑 安全密钥存储
-
-API Key 通过 VS Code 原生 `secretStorage` 加密保存，不落盘明文。
-
-### 🔄 配置变更自动重载
-
-保存配置后扩展自动感知变更并刷新模型列表，无需手动重启。
-
-    </td>
-  </tr>
-</table>
+| 能力 | 说明 |
+|---|---|
+| 🧩 多供应商支持 | 支持 OpenAI 兼容 API、中转站、本地反代、Anthropic 端点、Ollama 和自定义主机。 |
+| 🧠 Copilot 工具调用桥接 | 将 OpenAI `tool_calls`、旧版 `function_call`、Responses API 函数调用和 Anthropic `tool_use` 转换为 VS Code Copilot 工具调用。 |
+| 🧼 中转站输出清理 | 过滤空流片段、`[DONE]`、协议事件行、HTML 页面，以及不应作为正文显示的工具参数增量。 |
+| 🔄 模型获取 | 尝试中转站友好的 `/models` 端点，解析常见嵌套返回，并过滤 `success`、`object` 等非模型字段。 |
+| ✍️ 手动模型 | 当中转站隐藏模型或模型列表不完整时，可以手动添加模型 ID。 |
+| 📦 预设导入 | 可从侧边栏导入 GPT、Gemini、Claude、DeepSeek 等常用模型预设。 |
+| 🧬 指纹管理 | 每个供应商可新增、编辑、删除并启用指纹 Header，适配需要会话/设备指纹的中转站或本地反代。 |
+| 🎛️ 侧边栏设置 | 在 Custom AI 活动栏视图中添加供应商、获取模型、编辑模型、删除模型、导入预设和管理指纹。 |
+| 🌉 WSL/本地支持 | 同一个 VSIX 支持本地 Windows、本地 Linux、WSL 和远程 Linux 扩展主机。 |
 
 ---
 
-## 📦 支持的提供商
+## 📦 支持的供应商
 
-| 提供商 | Base URL | 示例模型 |
+| 供应商类型 | Base URL 示例 | 说明 |
 |---|---|---|
-| 🟦 **阶跃星辰** Step | `https://api.stepfun.com/v1` | step-3.5-flash-2603、step-3.5-flash |
-| 🟩 **智谱 AI** GLM | `https://open.bigmodel.cn/api/paas/v4` | glm-5.1、glm-5、glm-5-turbo |
-| 🟧 **月之暗面** Moonshot | `https://api.moonshot.cn/v1` | kimi-k2.6、kimi-k2.5、moonshot-v1-128k |
-| 🔴 **DeepSeek** | `https://api.deepseek.com/v1` | deepseek-v4-pro、deepseek-v4-flash |
-| 🟫 **百川** Baichuan | `https://api.baichuan-ai.com/v1` | Baichuan4、Baichuan4-Air |
-| 🟨 **零一万物** Yi | `https://api.lingyiwanwu.com/v1` | yi-lightning、yi-large、yi-medium |
-| ⬛ **OpenAI** | `https://api.openai.com/v1` | gpt-4.1、gpt-4o、o3 |
-| 🟪 **Anthropic** | `https://api.anthropic.com/v1` | claude-sonnet-4、claude-3.5-sonnet |
-| 🐪 **Ollama** | `http://localhost:11434/v1` | llama3.2、qwen2.5、deepseek-r1 |
-| 🔗 **自定义** | 任意 OpenAI 兼容 API | 视接口而定 |
+| OpenAI 兼容中转站 | `https://api.example.com` 或 `https://api.example.com/v1` | 自动规范化 host root、`/v1` 和 `/v1/chat/completions` 输入。 |
+| 本地反代 | `http://127.0.0.1:58486/v1` | 适合在 VS Code、WSL 或 Remote 中调用 Windows 主机上的本地 API。 |
+| OpenAI | `https://api.openai.com/v1` | 使用账号或代理暴露的 OpenAI 兼容 Chat Completions 模型。 |
+| Anthropic 原生 | `https://api.anthropic.com/v1` | 仅官方 Anthropic 风格 `/messages` 端点会走 Anthropic 协议。 |
+| Ollama | `http://localhost:11434/v1` | 通常无需 API Key。 |
+| 自定义 | 任意兼容端点 | 如果 `/models` 不完整，可使用手动模型或预设。 |
+
+常用预设族包括 GPT、Gemini、Claude、DeepSeek、Qwen、Kimi、GLM、Step、Baichuan、Yi，以及其他中转站暴露的 OpenAI 兼容模型 ID。
 
 ---
 
 ## 📥 安装
 
-### 方式一：VSIX（推荐）
+### 方式一：从 GitHub Releases 下载
 
-1. 从 [Releases](https://github.com/ksk2023/custom_model_for_github_copliot/releases) 下载最新 `.vsix` 文件
-2. 打开 VS Code → **扩展面板**（<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>X</kbd>）
-3. 点击 **⋯** 菜单 → **从 VSIX 安装...**
-4. 选择下载的文件
+1. 打开 [Latest Release](https://github.com/ksk2023/custom_model_for_github_copliot/releases/latest)。
+2. 下载 `custom-copilot-chat-1.1.30.vsix`。
+3. 在 VS Code 中打开 **扩展面板**（`Ctrl+Shift+X`）。
+4. 选择 **⋯ → 从 VSIX 安装...**，然后选择下载的文件。
 
-同一个 VSIX 同时支持本地 Windows、本地 Linux、WSL 和远程 Linux 扩展主机。
+### 方式二：命令行安装
 
-### 方式二：命令行
-
-```bash
-code --install-extension custom-copilot-chat-1.1.18.vsix
-```
-
-如果要安装到 WSL 或远程 Linux，请在已经连接到该环境的 VS Code 窗口里运行安装命令，或者使用：
+安装到当前本地 VS Code 扩展主机：
 
 ```bash
-code --remote wsl+Ubuntu --install-extension custom-copilot-chat-1.1.18.vsix
+code --install-extension custom-copilot-chat-1.1.30.vsix
 ```
+
+安装到 WSL 扩展主机：
+
+```bash
+code --remote wsl+Ubuntu --install-extension custom-copilot-chat-1.1.30.vsix
+```
+
+如果是 Remote SSH 或远程 Linux，请在已经连接到该环境的 VS Code 窗口中运行安装命令，确保扩展安装到远程扩展主机。
 
 ---
 
 ## ⚡ 快速开始
 
-### 1. 添加模型
-
-按 <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> → **"Custom AI: Quick Add Model"**
-
-然后：
-- 选择 **提供商**（如阶跃星辰）
-- 填入 **Base URL** 和 **API Key**
-- 点击 **"获取可用模型列表"**
-- 勾选模型 → **保存**
-
-### 2. 在 Copilot Chat 中使用
-
-打开 Copilot Chat（<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>I</kbd>）→ 在**模型下拉菜单**选择你添加的模型 → 开始对话。
+1. 从 VS Code 活动栏打开 **Custom AI**，或在命令面板运行 **Custom AI: Open Config**。
+2. 点击 **添加供应商**，或编辑已有供应商。
+3. 填写 **Base URL**：
+   - 中转站 host root：`https://api.example.com`
+   - 中转站 `/v1`：`https://api.example.com/v1`
+   - 完整聊天端点：`https://api.example.com/v1/chat/completions`
+   - 本地反代：`http://127.0.0.1:58486/v1`
+4. 按需填写 **API Key**。
+5. 点击 **获取模型**。如果中转站没有暴露完整模型列表，使用 **+ 模型** 或 **导入预设**。
+6. 启用你希望出现在 Copilot Chat 里的模型。
+7. 打开 Copilot Chat，在模型选择器中选择自定义模型。
 
 ---
 
-## ⚙️ 配置说明
+## 🧠 中转站与工具调用兼容
 
-### 方式一：配置面板（推荐）
+很多中转站会把 Claude、Gemini、DeepSeek 或 GPT 类模型包装成 OpenAI 兼容 API。它们的返回格式通常“接近 OpenAI”，但并不完全一致。这个扩展会适配常见变体，让 Copilot 仍然可以调用读取文件、工作区搜索等 VS Code 提供的工具。
 
-1. <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> → **"Custom AI: Open Config"**
-2. 点击 **+ 添加模型**
-3. 选择提供商，填入 URL 和密钥
-4. 点击 **获取可用模型列表**
-5. 选择模型并 **保存**
+### 请求侧规范化
 
-### 方式二：设置 JSON
+- 对中转站发送 OpenAI 兼容的 `messages` 和 `tools`。
+- Claude 命名的中转站模型默认仍走 OpenAI 兼容路径，除非端点是官方 Anthropic `/messages`。
+- 将 host root 或 `/v1` 规范化到 `/v1/chat/completions`。
+- 尽可能将模型列表 URL 规范化到 `/v1/models`。
+- 支持流式、非流式和本地兼容模式。
+
+### 响应侧规范化
+
+- 将助手文本流式输出为 `LanguageModelTextPart`。
+- 累积被拆分的 `delta.tool_calls[*].function.arguments`，并发出合法 Copilot 工具调用。
+- 支持旧版 OpenAI `function_call` 片段。
+- 支持 OpenAI Responses API 风格的函数调用输出项。
+- 支持 Anthropic 原生 `tool_use` 块和工具输入增量。
+- 当中转站没有返回 `finish_reason: "tool_calls"` 时，也会在流结束时刷新待处理工具调用。
+- 纯工具调用、没有助手文本的响应也会被视为合法响应。
+
+### 边界说明
+
+- 上游模型或中转站必须返回机器可读的工具/函数调用。普通文本里写“我要调用工具”无法转换成真正的 Copilot 工具调用。
+- 扩展会过滤协议级噪音，但如果中转站把广告、隐藏提示词或策略文本作为正常助手正文输出，扩展无法可靠判断并删除。
+- 如果中转站返回 HTML 应用页面而不是 JSON，通常说明 Base URL 指向了网站前端，而不是 API 端点。
+
+---
+
+## 🧬 指纹管理
+
+部分本地反代或中转站需要会话、设备或账号指纹。每个供应商可以保存多个指纹，并一次启用其中一个。
+
+默认指纹 Header 是：
+
+```text
+X-Fingerprint: your-fingerprint-value
+```
+
+也支持在指纹值中填写高级 Header JSON，例如：
 
 ```json
 {
-  "customai.models": [
-    {
-      "id": "model-001",
-      "name": "我的 GPT-4o",
-      "providerId": "openai",
-      "modelName": "gpt-4o",
-      "enabled": true,
-      "temperature": 0.7,
-      "maxTokens": 8192
-    }
-  ]
+  "X-Fingerprint": "your-fingerprint",
+  "X-Device-Id": "your-device-id"
 }
 ```
 
+启用后的指纹会同时应用到聊天请求和该供应商的模型获取请求。
+
 ---
 
-## 🔧 配置项说明
+## ⚙️ 配置项说明
 
 | 配置项 | 默认值 | 说明 |
-|---|---|---|
-| `customai.models` | `[]` | 已配置的自定义模型列表 |
-| `customai.providers` | `[]` | 提供商端点列表 |
-| `customai.defaultTemperature` | `0.7` | 默认回复温度（0–2） |
-| `customai.defaultMaxTokens` | `4096` | 默认单次最大 Token 数 |
-| `customai.debug` | `false` | 开启调试日志 |
+|---|---:|---|
+| `customai.providers` | `[]` | 供应商端点，包含 `baseUrl`、`apiKey` 和可选指纹。 |
+| `customai.models` | `[]` | 显示在 Copilot Chat 中的模型，每个模型属于一个供应商。 |
+| `customai.defaultTemperature` | `0.7` | 模型未单独覆盖时的默认温度。 |
+| `customai.defaultMaxTokens` | `4096` | 模型未单独覆盖时的默认最大 Token 值。 |
+| `customai.streamMode` | `auto` | `auto`、`stream` 或 `non-stream`。 |
+| `customai.localEndpointHosts` | `[]` | WSL 或远程环境下，本地端点失败时额外尝试的 host/IP。 |
+| `customai.localCompatibilityMode` | `auto` | 本地反代请求兼容模式：`auto`、`full` 或 `minimal`。 |
+| `customai.debug` | `false` | 在 **Custom AI** 输出通道开启详细日志。 |
+
+设置示例：
+
+```json
+{
+  "customai.providers": [
+    {
+      "id": "provider-xi",
+      "name": "Xi API",
+      "baseUrl": "https://api.xi-ai.cn",
+      "apiKey": "sk-...",
+      "activeFingerprintId": "fp-main",
+      "fingerprints": [
+        {
+          "id": "fp-main",
+          "name": "Default",
+          "headerName": "X-Fingerprint",
+          "value": "your-fingerprint"
+        }
+      ]
+    }
+  ],
+  "customai.models": [
+    {
+      "id": "model-gpt-55",
+      "providerId": "provider-xi",
+      "modelName": "gpt-5.5",
+      "displayName": "Xi API - GPT-5.5",
+      "maxInputTokens": 1050000,
+      "visible": true,
+      "reasoningProfile": "openai",
+      "reasoningEffort": "default",
+      "thinkingType": "default",
+      "customRequestParams": ""
+    }
+  ],
+  "customai.streamMode": "auto",
+  "customai.localCompatibilityMode": "auto"
+}
+```
+
+API Key 会在界面中做遮罩显示，但实际保存在 VS Code 扩展设置中。不要分享包含供应商凭据的导出设置文件。
+
+---
+
+## 🧪 推荐配置组合
+
+| 场景 | 推荐设置 |
+|---|---|
+| OpenAI 兼容中转站 | `streamMode: auto`，供应商 Base URL 填 host root 或 `/v1`。 |
+| 中转站流式不稳定 | 尝试 `streamMode: non-stream`；纯工具调用的非流式响应也受支持。 |
+| WSL 调用 Windows 本地反代 | 优先使用 `http://127.0.0.1:58486/v1`；必要时在 `customai.localEndpointHosts` 加 host fallback。 |
+| `/models` 返回不完整 | 使用 **+ 模型** 或 **导入预设**；模型获取失败不代表聊天不可用。 |
+| Claude 模型通过 OpenAI 中转站 | 保持供应商为 OpenAI 兼容/自定义；除非端点是 Anthropic 原生，否则不会强行切 Anthropic 协议。 |
 
 ---
 
 ## ❓ 常见问题
 
-**Q: 模型没有出现在 Copilot Chat 选择器中？**
+**Q: `/v1/models` 返回 502，但 curl 聊天正常，怎么办？**
 
-- 确认扩展已**安装并启用**
-- 检查 `customai.models` 配置是否正确
-- 尝试**重载窗口**（<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> → *Developer: Reload Window*）
+使用 **+ 模型** 或 **导入预设**。有些中转站不会稳定代理模型列表请求，但聊天接口仍然可用。
 
-**Q: API 请求失败？**
+**Q: 为什么遇到带 `delta.tool_calls` 的流式响应会报 `unsupported stream format`？**
 
-- 核对 **API Key** 是否正确
-- 确认 **Base URL** 网络可访问
-- 检查**模型名称**是否该提供商支持的
+请安装 `1.1.29` 或更高版本。纯工具调用流式响应现在会被视为合法响应，并转换成 Copilot 工具调用。
 
-**Q: 如何使用 Ollama 本地模型？**
+**Q: 为什么模型列表里出现 `success` 或 `object`？**
 
-1. 确保 Ollama 正在运行：`ollama serve`
-2. 使用 Base URL `http://localhost:11434/v1` — 无需 API Key
-3. 填写本地模型名称（如 `llama3.2`）
+请使用 `1.1.29` 或更高版本。模型获取逻辑会过滤常见元数据字段，并从嵌套中转站响应里提取模型 ID。
+
+**Q: 为什么导入预设或获取模型时出现 HTML？**
+
+Base URL 指向了网站前端，或中转站返回了登录/应用页面。请改用 API host root、`/v1` 或 `/v1/chat/completions` 端点。
+
+**Q: 扩展能去掉上游提示词污染吗？**
+
+它会清理协议级噪音和工具参数泄漏，但无法安全删除上游模型作为普通助手正文输出的任意文本。
 
 ---
 
 ## 🛠️ 开发
 
 ```bash
-# 安装依赖
 npm install
-
-# 编译 TypeScript
 npm run compile
-
-# 打包 VSIX
 npm run build
 ```
+
+`npm run build` 会编译 TypeScript 并打包 VSIX。
 
 ---
 
