@@ -22,6 +22,7 @@ import {
   getProviders,
   saveProvider,
   deleteProvider,
+  deleteModel as deleteSavedModel,
   getModels,
   saveModels,
   migrateOldConfigIfNeeded,
@@ -244,7 +245,8 @@ async function quickAddModel(): Promise<void> {
       placeHolder: "gpt-4-turbo-preview",
     });
     if (!manual) return;
-    visibleModelIds = [manual.trim()];
+    visibleModelIds = parseManualModelIds(manual);
+    if (visibleModelIds.length === 0) return;
   }
 
   await saveProvider(newProvider);
@@ -1088,11 +1090,23 @@ function readStringArray(value: unknown): string[] {
   }
   if (typeof value === "string") {
     return value
-      .split(/[,\s|/]+/)
+      .split(/[,，;；、\s|/]+/)
       .map((item) => item.trim())
       .filter((item) => !!item);
   }
   return [];
+}
+
+function parseManualModelIds(input: string): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const item of input.split(/[\r\n,，;；、]+/)) {
+    const id = item.trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    result.push(id);
+  }
+  return result;
 }
 
 function readNumber(value: unknown): number | undefined {
@@ -1169,6 +1183,26 @@ async function handleConfigWebviewMessage(webview: vscode.Webview, message: any,
       await deleteProvider(message.id);
       provider?.refreshModelPicker();
       sendConfig();
+      break;
+    }
+    case "deleteModel": {
+      if (message.id) {
+        await deleteSavedModel(message.id);
+        provider?.refreshModelPicker();
+        sendConfig();
+      }
+      break;
+    }
+    case "deleteModels": {
+      const ids = new Set<string>(
+        (Array.isArray(message.ids) ? message.ids : [])
+          .filter((id: unknown): id is string => typeof id === "string" && !!id)
+      );
+      if (ids.size > 0) {
+        await saveModels(getModels().filter((model) => !ids.has(model.id)));
+        provider?.refreshModelPicker();
+        sendConfig();
+      }
       break;
     }
     case "fetchModels": {

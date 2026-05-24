@@ -63,9 +63,24 @@ export function getWebviewContent(): string {
     "      align-items: flex-start;",
     "      gap: 12px;",
     "    }",
+    "    .provider-title { display: flex; align-items: flex-start; gap: 7px; min-width: 0; }",
+    "    .provider-title-text { min-width: 0; }",
     "    .provider-name { font-weight: 600; font-size: 13px; }",
     "    .provider-meta { font-size: 10px; color: var(--desc); margin-top: 3px; word-break: break-all; }",
     "    .provider-actions { display: flex; gap: 5px; flex-shrink: 0; }",
+    "    .collapse-toggle {",
+    "      width: 22px;",
+    "      height: 22px;",
+    "      padding: 0;",
+    "      border: 1px solid var(--border);",
+    "      border-radius: 3px;",
+    "      background: transparent;",
+    "      color: var(--fg);",
+    "      cursor: pointer;",
+    "      line-height: 18px;",
+    "      flex-shrink: 0;",
+    "    }",
+    "    .collapse-toggle:hover { border-color: var(--focus); }",
     "    .fingerprint-section {",
     "      margin-top: 10px;",
     "      padding-top: 10px;",
@@ -100,6 +115,8 @@ export function getWebviewContent(): string {
     "      padding-top: 10px;",
     "      border-top: 1px solid var(--border);",
     "    }",
+    "    .models-title { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 11px; color: var(--desc); }",
+    "    .models-summary { font-size: 11px; color: var(--desc); padding: 6px 0; }",
     "    .model-row {",
     "      display: flex;",
     "      align-items: center;",
@@ -331,6 +348,7 @@ function getWebviewScript(): string {
   lines.push("  var editingFingerprintId = null;");
   lines.push("  var manualModelProviderId = null;");
   lines.push("  var presetProviderId = null;");
+  lines.push("  var collapsedProviders = {};");
   lines.push("  var loadTimer = null;");
   lines.push("");
   lines.push("  boot();");
@@ -338,6 +356,8 @@ function getWebviewScript(): string {
   lines.push("  function boot() {");
   lines.push("    try {");
   lines.push("      vscode = acquireVsCodeApi();");
+  lines.push("      var persisted = vscode.getState ? vscode.getState() : null;");
+  lines.push("      collapsedProviders = persisted && persisted.collapsedProviders ? persisted.collapsedProviders : {};");
   lines.push("      bindStaticEvents();");
   lines.push("      window.addEventListener('message', onMessage);");
   lines.push("      setStatus('正在加载...');");
@@ -365,6 +385,7 @@ function getWebviewScript(): string {
   lines.push("      if (msg.type === 'config') {");
   lines.push("        providers = msg.providers || [];");
   lines.push("        models = msg.models || [];");
+  lines.push("        pruneCollapsedProviders();");
   lines.push("        if (loadTimer) { clearTimeout(loadTimer); loadTimer = null; }");
   lines.push("        render();");
   lines.push("        setStatus(providers.length + ' 个供应商, ' + models.length + ' 个模型');");
@@ -388,6 +409,29 @@ function getWebviewScript(): string {
   lines.push("    vscode.postMessage({ type: 'getConfig' });");
   lines.push("  }");
   lines.push("");
+  lines.push("  function persistState() {");
+  lines.push("    try {");
+  lines.push("      if (vscode && vscode.setState) vscode.setState({ collapsedProviders: collapsedProviders });");
+  lines.push("    } catch (err) {}");
+  lines.push("  }");
+  lines.push("");
+  lines.push("  function pruneCollapsedProviders() {");
+  lines.push("    var known = {};");
+  lines.push("    for (var i = 0; i < providers.length; i++) known[providers[i].id] = true;");
+  lines.push("    var changed = false;");
+  lines.push("    for (var key in collapsedProviders) {");
+  lines.push("      if (!known[key]) { delete collapsedProviders[key]; changed = true; }");
+  lines.push("    }");
+  lines.push("    if (changed) persistState();");
+  lines.push("  }");
+  lines.push("");
+  lines.push("  function toggleProviderModels(providerId) {");
+  lines.push("    if (!providerId) return;");
+  lines.push("    collapsedProviders[providerId] = !collapsedProviders[providerId];");
+  lines.push("    persistState();");
+  lines.push("    render();");
+  lines.push("  }");
+  lines.push("");
   lines.push("  function render() {");
   lines.push("    var el = document.getElementById('providersList');");
   lines.push("    if (!el) return;");
@@ -405,12 +449,15 @@ function getWebviewScript(): string {
   lines.push("      for (var k = 0; k < providerModels.length; k++) {");
   lines.push("        if (providerModels[k].visible) visibleCount++;");
   lines.push("      }");
+  lines.push("      var modelsCollapsed = !!collapsedProviders[provider.id];");
   lines.push("      html += '<div class=\"provider-card\">';");
   lines.push("      html += '<div class=\"provider-header\">';");
-  lines.push("      html += '<div>';");
+  lines.push("      html += '<div class=\"provider-title\">';");
+  lines.push("      html += '<button class=\"collapse-toggle\" data-action=\"toggle-models\" data-id=\"' + attr(provider.id) + '\" title=\"折叠/展开模型列表\">' + (modelsCollapsed ? '▸' : '▾') + '</button>'; ");
+  lines.push("      html += '<div class=\"provider-title-text\">';");
   lines.push("      html += '<div class=\"provider-name\">' + esc(provider.name) + '<span class=\"badge\">' + visibleCount + '/' + providerModels.length + ' 可见</span></div>'; ");
   lines.push("      html += '<div class=\"provider-meta\">' + esc(provider.baseUrl) + '</div>'; ");
-  lines.push("      html += '</div>';");
+  lines.push("      html += '</div></div>';");
   lines.push("      html += '<div class=\"provider-actions\">';");
   lines.push("      html += '<button class=\"btn btn-primary btn-sm\" data-action=\"test\" data-id=\"' + attr(provider.id) + '\">测试</button>'; ");
   lines.push("      html += '<button class=\"btn btn-primary btn-sm\" data-action=\"fetch\" data-id=\"' + attr(provider.id) + '\">获取模型</button>'; ");
@@ -422,11 +469,15 @@ function getWebviewScript(): string {
   lines.push("      html += '</div>';");
   lines.push("      html += renderFingerprintSection(provider);");
   lines.push("      html += '<div class=\"models-section\">';");
-  lines.push("      if (providerModels.length > 0) {");
+  lines.push("      html += '<div class=\"models-title\"><span>模型列表 <span class=\"badge\">' + providerModels.length + '</span></span><button class=\"btn btn-primary btn-xs\" data-action=\"toggle-models\" data-id=\"' + attr(provider.id) + '\">' + (modelsCollapsed ? '展开' : '折叠') + '</button></div>'; ");
+  lines.push("      if (modelsCollapsed) {");
+  lines.push("        html += '<div class=\"models-summary\">已折叠 ' + providerModels.length + ' 个模型，点击「展开」查看或管理。</div>'; ");
+  lines.push("      } else if (providerModels.length > 0) {");
   lines.push("        html += '<div class=\"models-toolbar\">';");
   lines.push("        html += '<button class=\"btn btn-primary btn-xs\" data-action=\"all-visible\" data-id=\"' + attr(provider.id) + '\">全选</button>'; ");
   lines.push("        html += '<button class=\"btn btn-primary btn-xs\" data-action=\"all-hidden\" data-id=\"' + attr(provider.id) + '\">全不选</button>'; ");
   lines.push("        html += '<button class=\"btn btn-primary btn-xs\" data-action=\"save-models\" data-id=\"' + attr(provider.id) + '\">保存勾选</button>'; ");
+  lines.push("        html += '<button class=\"btn btn-danger btn-xs\" data-action=\"delete-hidden\" data-id=\"' + attr(provider.id) + '\">删除未勾选</button>'; ");
   lines.push("        html += '<span class=\"fetch-status\" id=\"fs_' + attr(provider.id) + '\"></span>'; ");
   lines.push("        html += '</div>';");
   lines.push("        for (var m = 0; m < providerModels.length; m++) {");
@@ -499,6 +550,7 @@ function getWebviewScript(): string {
   lines.push("        if (action === 'test') testProvider(id);");
   lines.push("        if (action === 'manual-model') manualAddModel(id);");
   lines.push("        if (action === 'preset-models') importPresetModels(id);");
+  lines.push("        if (action === 'toggle-models') toggleProviderModels(id);");
   lines.push("        if (action === 'edit') showModal(id);");
   lines.push("        if (action === 'delete') askDelete(id);");
   lines.push("        if (action === 'delete-model') deleteModel(id, modelId);");
@@ -508,6 +560,7 @@ function getWebviewScript(): string {
   lines.push("        if (action === 'activate-fingerprint') activateFingerprint(id, fingerprintId);");
   lines.push("        if (action === 'all-visible') toggleAll(id, true);");
   lines.push("        if (action === 'all-hidden') toggleAll(id, false);");
+  lines.push("        if (action === 'delete-hidden') deleteHiddenModels(id);");
   lines.push("        if (action === 'save-models') saveModels(id);");
   lines.push("      };");
   lines.push("    });");
@@ -751,10 +804,23 @@ function getWebviewScript(): string {
   lines.push("    if (!provider) return;");
   lines.push("    var raw = document.getElementById('manualModelsInput').value.trim();");
   lines.push("    if (!raw) { alert('请输入至少一个模型 ID'); return; }");
-  lines.push("    var items = raw.split(/[\\n,;]+/).map(function(item) { return item.trim(); }).filter(function(item) { return !!item; }).map(function(id) { return { id: id }; });");
+  lines.push("    var items = splitModelIds(raw).map(function(id) { return { id: id }; });");
+  lines.push("    if (items.length === 0) { alert('没有识别到有效模型 ID'); return; }");
   lines.push("    handleModelsFetched(providerId, items);");
   lines.push("    hideModal('modalManualModel');");
   lines.push("    manualModelProviderId = null;");
+  lines.push("  }");
+  lines.push("");
+  lines.push("  function splitModelIds(raw) {");
+  lines.push("    var seen = {};");
+  lines.push("    var result = [];");
+  lines.push("    String(raw || '').split(/[\\r\\n,，;；、]+/).forEach(function(item) {");
+  lines.push("      var id = item.trim();");
+  lines.push("      if (!id || seen[id]) return;");
+  lines.push("      seen[id] = true;");
+  lines.push("      result.push(id);");
+  lines.push("    });");
+  lines.push("    return result;");
   lines.push("  }");
   lines.push("");
   lines.push("  function importPresetModels(providerId) {");
@@ -827,7 +893,27 @@ function getWebviewScript(): string {
   lines.push("    if (!confirm('确定删除模型 \"' + model.modelName + '\" 吗？')) return;");
   lines.push("    models = models.filter(function(item) { return item.id !== modelId; });");
   lines.push("    render();");
-  lines.push("    saveModels(providerId);");
+  lines.push("    vscode.postMessage({ type: 'deleteModel', id: modelId, providerId: providerId });");
+  lines.push("    setFetchStatus(providerId, '✓ 已删除模型');");
+  lines.push("  }");
+  lines.push("");
+  lines.push("  function deleteHiddenModels(providerId) {");
+  lines.push("    if (!providerId) return;");
+  lines.push("    var ids = [];");
+  lines.push("    for (var i = 0; i < models.length; i++) {");
+  lines.push("      if (models[i].providerId !== providerId) continue;");
+  lines.push("      var checkbox = document.getElementById('cb_' + models[i].id);");
+  lines.push("      var checked = checkbox ? checkbox.checked : !!models[i].visible;");
+  lines.push("      if (!checked) ids.push(models[i].id);");
+  lines.push("    }");
+  lines.push("    if (ids.length === 0) { alert('没有未勾选的模型可删除'); return; }");
+  lines.push("    if (!confirm('确定删除当前供应商下 ' + ids.length + ' 个未勾选模型吗？')) return;");
+  lines.push("    var deleteMap = {};");
+  lines.push("    for (var j = 0; j < ids.length; j++) deleteMap[ids[j]] = true;");
+  lines.push("    models = models.filter(function(item) { return !deleteMap[item.id]; });");
+  lines.push("    render();");
+  lines.push("    vscode.postMessage({ type: 'deleteModels', ids: ids, providerId: providerId });");
+  lines.push("    setFetchStatus(providerId, '✓ 已删除 ' + ids.length + ' 个模型');");
   lines.push("  }");
   lines.push("");
   lines.push("  function showError(providerId, error) {");
@@ -1043,7 +1129,7 @@ function getWebviewScript(): string {
   lines.push("      return result;");
   lines.push("    }");
   lines.push("    if (typeof value === 'string') {");
-  lines.push("      return value.split(/[,\\s|\\/]+/).map(function(item) { return item.trim(); }).filter(function(item) { return !!item; });");
+  lines.push("      return value.split(/[,，;；、\\s|\\/]+/).map(function(item) { return item.trim(); }).filter(function(item) { return !!item; });");
   lines.push("    }");
   lines.push("    return [];");
   lines.push("  }");

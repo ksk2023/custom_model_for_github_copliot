@@ -3,7 +3,7 @@
 [English](./README.md) | [中文](./README_zh.md)
 
 ![VS Code](https://img.shields.io/badge/VS%20Code-%23007ACC?style=flat&logo=visual-studio-code&logoColor=white)
-![Version](https://img.shields.io/badge/version-1.1.30-blue?style=flat)
+![Version](https://img.shields.io/badge/version-1.1.31-blue?style=flat)
 ![License](https://img.shields.io/badge/license-MIT-green?style=flat)
 ![TypeScript](https://img.shields.io/badge/TypeScript-%23007ACC?style=flat&logo=typescript&logoColor=white)
 
@@ -13,11 +13,12 @@ The extension focuses on Copilot integration, not just raw chat completion: it n
 
 ---
 
-## ✨ What's New in 1.1.30
+## ✨ What's New in 1.1.31
 
-- **Documentation sync**: English and Chinese README files now describe the same current behavior, settings, installation paths, and compatibility notes.
-- **Current VSIX flow**: install examples now point to the latest `custom-copilot-chat-1.1.30.vsix` package.
-- **Relay compatibility notes**: docs now explain how tool-call bridging, endpoint normalization, model fetching, and manual presets work together.
+- **Reliable model deletion**: single-model deletion now uses a dedicated extension-host delete path instead of indirectly saving the remaining list.
+- **Bulk cleanup**: provider model lists include **Delete Unchecked** so you can uncheck many unwanted relay models and remove them together.
+- **Better manual parsing**: manual model entry now splits both English commas and Chinese commas, plus newlines, semicolons, and Chinese list separators.
+- **Collapsible provider models**: each provider can collapse or expand its model list, keeping relay providers with hundreds of models manageable.
 
 ---
 
@@ -57,7 +58,7 @@ Common preset families include GPT, Gemini, Claude, DeepSeek, Qwen, Kimi, GLM, S
 ### Option 1: Download from GitHub Releases
 
 1. Open [Latest Release](https://github.com/ksk2023/custom_model_for_github_copliot/releases/latest).
-2. Download `custom-copilot-chat-1.1.30.vsix`.
+2. Download `custom-copilot-chat-1.1.31.vsix`.
 3. In VS Code, open **Extensions** (`Ctrl+Shift+X`).
 4. Select **⋯ → Install from VSIX...** and choose the downloaded file.
 
@@ -66,13 +67,13 @@ Common preset families include GPT, Gemini, Claude, DeepSeek, Qwen, Kimi, GLM, S
 Install into the current local VS Code extension host:
 
 ```bash
-code --install-extension custom-copilot-chat-1.1.30.vsix
+code --install-extension custom-copilot-chat-1.1.31.vsix
 ```
 
 Install into a WSL extension host:
 
 ```bash
-code --remote wsl+Ubuntu --install-extension custom-copilot-chat-1.1.30.vsix
+code --remote wsl+Ubuntu --install-extension custom-copilot-chat-1.1.31.vsix
 ```
 
 For Remote SSH or remote Linux, run the install command from the connected VS Code window so the extension is installed into the remote extension host.

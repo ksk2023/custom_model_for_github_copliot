@@ -3,7 +3,7 @@
 [English](./README.md) | [中文](./README_zh.md)
 
 ![VS Code](https://img.shields.io/badge/VS%20Code-%23007ACC?style=flat&logo=visual-studio-code&logoColor=white)
-![Version](https://img.shields.io/badge/version-1.1.30-blue?style=flat)
+![Version](https://img.shields.io/badge/version-1.1.31-blue?style=flat)
 ![License](https://img.shields.io/badge/license-MIT-green?style=flat)
 ![TypeScript](https://img.shields.io/badge/TypeScript-%23007ACC?style=flat&logo=typescript&logoColor=white)
 
@@ -13,11 +13,12 @@ Custom Copilot Chat 可以让 GitHub Copilot Chat 使用 OpenAI 兼容 API、中
 
 ---
 
-## ✨ 1.1.30 更新
+## ✨ 1.1.31 更新
 
-- **中英文文档同步**：英文 README 和中文 README 现在同步描述当前行为、配置项、安装方式和兼容性说明。
-- **最新版 VSIX 流程**：安装示例已更新为 `custom-copilot-chat-1.1.30.vsix`。
-- **中转站兼容说明**：补充工具调用桥接、端点规范化、模型获取和手动预设如何配合使用。
+- **模型删除更可靠**：单个模型删除现在走扩展宿主的专用删除逻辑，不再依赖“保存剩余列表”的间接路径。
+- **批量清理模型**：供应商模型列表新增 **删除未勾选**，可以先取消勾选一批不需要的中转站模型，再一次性删除。
+- **手动添加解析增强**：手动输入模型时支持英文逗号、中文逗号、换行、分号和中文顿号拆分。
+- **供应商模型折叠**：每个供应商的模型列表都可以折叠/展开，几百个模型也不会撑满页面。
 
 ---
 
@@ -57,7 +58,7 @@ Custom Copilot Chat 可以让 GitHub Copilot Chat 使用 OpenAI 兼容 API、中
 ### 方式一：从 GitHub Releases 下载
 
 1. 打开 [Latest Release](https://github.com/ksk2023/custom_model_for_github_copliot/releases/latest)。
-2. 下载 `custom-copilot-chat-1.1.30.vsix`。
+2. 下载 `custom-copilot-chat-1.1.31.vsix`。
 3. 在 VS Code 中打开 **扩展面板**（`Ctrl+Shift+X`）。
 4. 选择 **⋯ → 从 VSIX 安装...**，然后选择下载的文件。
 
@@ -66,13 +67,13 @@ Custom Copilot Chat 可以让 GitHub Copilot Chat 使用 OpenAI 兼容 API、中
 安装到当前本地 VS Code 扩展主机：
 
 ```bash
-code --install-extension custom-copilot-chat-1.1.30.vsix
+code --install-extension custom-copilot-chat-1.1.31.vsix
 ```
 
 安装到 WSL 扩展主机：
 
 ```bash
-code --remote wsl+Ubuntu --install-extension custom-copilot-chat-1.1.30.vsix
+code --remote wsl+Ubuntu --install-extension custom-copilot-chat-1.1.31.vsix
 ```
 
 如果是 Remote SSH 或远程 Linux，请在已经连接到该环境的 VS Code 窗口中运行安装命令，确保扩展安装到远程扩展主机。
