@@ -1,11 +1,21 @@
+<div align="center">
+
 # 🚀 Custom Copilot Chat
 
-[English](./README.md) | [中文](./README_zh.md)
+**Bring your own models into GitHub Copilot Chat**
 
 ![VS Code](https://img.shields.io/badge/VS%20Code-%23007ACC?style=flat&logo=visual-studio-code&logoColor=white)
 ![Version](https://img.shields.io/badge/version-1.1.31-blue?style=flat)
 ![License](https://img.shields.io/badge/license-MIT-green?style=flat)
 ![TypeScript](https://img.shields.io/badge/TypeScript-%23007ACC?style=flat&logo=typescript&logoColor=white)
+
+[English](./README.md) | [中文](./README_zh.md)
+
+**Contents:** [What's New](#-whats-new-in-1131) · [Features](#-features) · [Providers](#-supported-providers) · [Installation](#-installation) · [Quick Start](#-quick-start) · [Compatibility](#-relay-and-tool-call-compatibility) · [Fingerprint](#-fingerprint-management) · [Configuration](#-configuration-reference) · [Recommended](#-recommended-configurations) · [FAQ](#-faq) · [Development](#-development) · [License](#-license)
+
+</div>
+
+---
 
 Custom Copilot Chat lets GitHub Copilot Chat use custom models from OpenAI-compatible APIs, relay providers, local reverse proxies, Anthropic-compatible endpoints, and Ollama-style local services.
 
