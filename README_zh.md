@@ -1,11 +1,21 @@
+<div align="center">
+
 # 🚀 Custom Copilot Chat
 
-[English](./README.md) | [中文](./README_zh.md)
+**把自定义模型接入 GitHub Copilot Chat**
 
 ![VS Code](https://img.shields.io/badge/VS%20Code-%23007ACC?style=flat&logo=visual-studio-code&logoColor=white)
 ![Version](https://img.shields.io/badge/version-1.1.31-blue?style=flat)
 ![License](https://img.shields.io/badge/license-MIT-green?style=flat)
 ![TypeScript](https://img.shields.io/badge/TypeScript-%23007ACC?style=flat&logo=typescript&logoColor=white)
+
+[English](./README.md) | [中文](./README_zh.md)
+
+**目录：** [1.1.31 更新](#-1131-更新) · [功能特性](#-功能特性) · [支持的供应商](#-支持的供应商) · [安装](#-安装) · [快速开始](#-快速开始) · [兼容性](#-中转站与工具调用兼容) · [指纹管理](#-指纹管理) · [配置项](#-配置项说明) · [推荐配置](#-推荐配置组合) · [常见问题](#-常见问题) · [开发](#-开发) · [许可证](#-许可证)
+
+</div>
+
+---
 
 Custom Copilot Chat 可以让 GitHub Copilot Chat 使用 OpenAI 兼容 API、中转站、本地反代、Anthropic 兼容端点和 Ollama 本地服务里的自定义模型。
 
